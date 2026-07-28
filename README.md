@@ -76,13 +76,24 @@ The host tier works fine on its own if you never install the runtime.
 
 ## Install
 
-Requires Windows and Windows PowerShell 5.1 (ships with Windows). No build step for the host tier.
+**[Download the latest release](https://github.com/Deaeath/3DXModKit/releases/latest)**, extract the folder anywhere, and double-click:
+
+```
+3dxGC.bat
+```
+
+That is the whole install. No setup, no dependencies, no build step — Windows PowerShell 5.1 ships with Windows and is all the host tier needs.
+
+The launcher asks for administrator once, because four of the five RAMMap-equivalent operations need it. **Decline and it still runs** — per-process trimming needs no privileges; you just lose the system-wide purges.
+
+> Extract the folder before running. Launching from inside the .zip leaves Windows' temp copy without the `gui\` and `src\` folders, and the launcher will tell you so.
+
+Prefer git?
 
 ```powershell
 git clone https://github.com/Deaeath/3DXModKit.git
 cd 3DXModKit
-.\gui\Start-Gui.ps1          # control panel
-# or
+.\3dxGC.bat                  # GUI
 .\modkit.ps1 status          # command line
 ```
 
@@ -205,6 +216,7 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 
 ```
 3DXModKit/
+├── 3dxGC.bat                     double-click launcher (self-elevating)
 ├── modkit.ps1                    CLI
 ├── 3DXModKit.psm1                module entry point
 ├── gui/
