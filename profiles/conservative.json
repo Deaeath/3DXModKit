@@ -1,0 +1,23 @@
+{
+  "description": "Touch nothing while the game is in use. Trims only on minimise or deep idle, never purges system-wide. Safest option if you notice any hitching.",
+  "enabled": [
+    "3dxgc"
+  ],
+  "config": {
+    "3dxgc": {
+      "triggers": {
+        "onBlur":      { "enabled": false },
+        "onMinimize":  { "enabled": true, "delaySeconds": 10 },
+        "onIdle":      { "enabled": true, "idleSeconds": 600 },
+        "onLowMemory": { "enabled": true },
+        "periodic":    { "enabled": false }
+      },
+      "thresholds": {
+        "minSecondsBetweenTrims": 300
+      },
+      "systemWide": {
+        "enabled": false
+      }
+    }
+  }
+}

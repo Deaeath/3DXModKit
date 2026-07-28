@@ -1,0 +1,15 @@
+{
+  "description": "External tier only. No in-process runtime, nothing written to the game directory, no divergence from integrity.conf. Working-set trimming and system purges only.",
+  "enabled": [
+    "3dxgc"
+  ],
+  "config": {
+    "3dxgc": {
+      "triggers": {
+        "onBlur":     { "enabled": true, "delaySeconds": 20 },
+        "onMinimize": { "enabled": true, "delaySeconds": 3 },
+        "onIdle":     { "enabled": true, "idleSeconds": 180 }
+      }
+    }
+  }
+}

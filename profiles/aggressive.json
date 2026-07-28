@@ -1,0 +1,31 @@
+{
+  "description": "RAMMap-by-hand equivalent. Short debounces, frequent periodic sweeps, and system-wide purges whenever free RAM dips - not just at critical. Expect occasional hitching when pages fault back in.",
+  "enabled": [
+    "3dxgc"
+  ],
+  "config": {
+    "3dxgc": {
+      "triggers": {
+        "onBlur":     { "enabled": true, "delaySeconds": 5 },
+        "onMinimize": { "enabled": true, "delaySeconds": 1 },
+        "onIdle":     { "enabled": true, "idleSeconds": 60 },
+        "periodic":   { "enabled": true, "everySeconds": 180, "onlyWhenBackgrounded": false }
+      },
+      "thresholds": {
+        "lowMemoryPercent": 25.0,
+        "criticalMemoryPercent": 15.0,
+        "minWorkingSetMB": 400,
+        "minSecondsBetweenTrims": 20
+      },
+      "systemWide": {
+        "enabled": true,
+        "onlyWhenCritical": false,
+        "emptySystemWorkingSet": true,
+        "minSecondsBetweenPurges": 120
+      },
+      "safety": {
+        "neverTrimWhenForeground": false
+      }
+    }
+  }
+}

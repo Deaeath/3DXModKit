@@ -1,0 +1,38 @@
+# Runtime output -------------------------------------------------------------
+logs/
+config/
+backups/
+
+# These hold machine-specific state: resolved paths, process ids, and copies of
+# game files taken before a BepInEx install. Nothing here belongs in the repo.
+
+# .NET build artefacts -------------------------------------------------------
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+runtime/src/**/bin/
+runtime/src/**/obj/
+
+# BepInEx / game artefacts ---------------------------------------------------
+# Interop assemblies are generated per game build and are the publisher's
+# copyrighted code decompiled to stubs. Never commit them.
+interop/
+BepInEx/
+*.dll
+*.pdb
+global-metadata.dat
+
+# Editor / OS ----------------------------------------------------------------
+.vs/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Scratch --------------------------------------------------------------------
+*.tmp
+_probe_*
+_writetest*

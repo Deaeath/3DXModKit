@@ -1,0 +1,15 @@
+# Windows-only project: PowerShell 5.1, WPF, Win32 P/Invoke.
+# Normalise to LF in the repo, check out CRLF on Windows.
+* text=auto
+
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.psd1  text eol=crlf
+*.xaml  text eol=crlf
+*.cs    text eol=crlf
+*.csproj text eol=crlf
+*.json  text eol=crlf
+*.md    text eol=crlf
+
+*.png   binary
+*.dll   binary

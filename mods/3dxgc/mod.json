@@ -1,0 +1,20 @@
+{
+  "id": "3dxgc",
+  "name": "3dxGC",
+  "version": "1.0.0",
+  "description": "Adaptive working-set governor for 3DXChat. Trims the game's resident footprint when it is backgrounded, minimised, or idle, and escalates to system-wide standby purges only under genuine memory pressure. Never trims while the game holds focus and is actively rendering.",
+  "author": "3DXModKit",
+  "tier": "host",
+  "entry": "Mod.ps1",
+  "loadPriority": 10,
+  "gameVersion": "471",
+  "capabilities": [
+    "process.query",
+    "memory.trim.self",
+    "memory.trim.system",
+    "fs.write.config",
+    "ui.console"
+  ],
+  "dependencies": [],
+  "conflicts": []
+}

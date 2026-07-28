@@ -1,0 +1,38 @@
+{
+  "enabled": true,
+
+  "triggers": {
+    "onBlur":      { "enabled": true,  "delaySeconds": 20 },
+    "onMinimize":  { "enabled": true,  "delaySeconds": 3  },
+    "onIdle":      { "enabled": true,  "idleSeconds": 180 },
+    "onLowMemory": { "enabled": true },
+    "periodic":    { "enabled": true,  "everySeconds": 600, "onlyWhenBackgrounded": true }
+  },
+
+  "thresholds": {
+    "lowMemoryPercent": 15.0,
+    "criticalMemoryPercent": 8.0,
+    "minWorkingSetMB": 800,
+    "minSecondsBetweenTrims": 45
+  },
+
+  "systemWide": {
+    "enabled": true,
+    "onlyWhenCritical": true,
+    "purgeStandby": true,
+    "purgeLowPriorityStandby": true,
+    "flushModifiedList": true,
+    "emptySystemWorkingSet": false,
+    "minSecondsBetweenPurges": 300
+  },
+
+  "companions": {
+    "trimLauncher": true,
+    "processNames": ["3DXLauncher"]
+  },
+
+  "safety": {
+    "neverTrimWhenForeground": true,
+    "logEverySkip": false
+  }
+}

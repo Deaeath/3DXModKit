@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    3DXModKit Runtime - BepInEx 6 (IL2CPP) plugin.
+
+    Build:
+      1. runtime\bootstrap\Install-BepInEx.ps1   (fetches BepInEx into the game dir)
+      2. runtime\bootstrap\Build-Plugin.ps1      (restores refs, builds, deploys)
+
+    BepInExPath is passed in by Build-Plugin.ps1 and points at the installed
+    BepInEx folder inside the game directory, which is where the interop
+    assemblies for this specific game build are generated.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>ModKit.Runtime</AssemblyName>
+    <RootNamespace>ThreeDX.ModKit.Runtime</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>1.0.0</Version>
+    <Authors>3DXModKit</Authors>
+    <Description>Client-side in-process memory management for 3DXChat</Description>
+
+    <!-- Interop assemblies are unsigned and unversioned; silence the noise. -->
+    <NoWarn>$(NoWarn);CS0436;CS0618;NU1701</NoWarn>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!--
+    Resolved from the local BepInEx install rather than NuGet, so the interop
+    assemblies match this exact game build (Unity 2021.3.45f2, build 471).
+  -->
+  <ItemGroup Condition="'$(BepInExPath)' != ''">
+    <Reference Include="BepInEx.Core">
+      <HintPath>$(BepInExPath)\core\BepInEx.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP">
+      <HintPath>$(BepInExPath)\core\BepInEx.Unity.IL2CPP.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(BepInExPath)\core\Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExPath)\core\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(BepInExPath)\interop\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(BepInExPath)\interop\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

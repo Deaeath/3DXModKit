@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "unloadOnBackground": true,
+  "unloadOnIdle": true,
+  "unloadOnLowMemory": true,
+  "minSecondsBetweenUnloads": 120,
+  "connectTimeoutMs": 2000,
+  "logStatsEveryTicks": 60,
+  "warnIfRuntimeMissing": true
+}

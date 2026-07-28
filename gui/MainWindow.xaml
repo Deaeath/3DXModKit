@@ -1,0 +1,402 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="3dxGC - 3DXChat Control Panel"
+        Height="790" Width="1040"
+        MinHeight="560" MinWidth="880"
+        WindowStartupLocation="CenterScreen"
+        Background="#FF14161A">
+
+  <!-- ASCII only. Windows PowerShell 5.1 reads BOM-less files as ANSI, so any
+       non-ASCII glyph here arrives as mojibake. -->
+
+  <Window.Resources>
+
+    <SolidColorBrush x:Key="Bg"        Color="#FF14161A"/>
+    <SolidColorBrush x:Key="Panel"     Color="#FF1C1F26"/>
+    <SolidColorBrush x:Key="PanelAlt"  Color="#FF232730"/>
+    <SolidColorBrush x:Key="Line"      Color="#FF2E333D"/>
+    <SolidColorBrush x:Key="Text"      Color="#FFE6E9EF"/>
+    <SolidColorBrush x:Key="TextDim"   Color="#FF8B93A3"/>
+    <SolidColorBrush x:Key="Accent"    Color="#FF4FA3FF"/>
+    <SolidColorBrush x:Key="Good"      Color="#FF4ADE80"/>
+    <SolidColorBrush x:Key="Warn"      Color="#FFFBBF24"/>
+    <SolidColorBrush x:Key="Bad"       Color="#FFF87171"/>
+
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+
+    <Style x:Key="Label" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource TextDim}"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+
+    <Style x:Key="Metric" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontSize" Value="26"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
+    </Style>
+
+    <Style x:Key="H2" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,0,0,8"/>
+    </Style>
+
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="{StaticResource PanelAlt}"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="12,7"/>
+      <Setter Property="Margin" Value="0,0,7,7"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="b" Property="Background" Value="#FF2E333D"/>
+                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="b" Property="Opacity" Value="0.4"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="#FF1D4E80"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <Style TargetType="TabItem">
+      <Setter Property="Foreground" Value="{StaticResource TextDim}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TabItem">
+            <Border x:Name="b" Background="Transparent" Padding="16,9" Margin="0,0,2,0"
+                    BorderThickness="0,0,0,2" BorderBrush="Transparent">
+              <ContentPresenter ContentSource="Header"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ListBox">
+      <Setter Property="Background" Value="{StaticResource Panel}"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="11"/>
+    </Style>
+
+    <Style TargetType="ComboBox">
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Margin" Value="0,4"/>
+    </Style>
+
+  </Window.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- header -->
+    <Border Grid.Row="0" Background="{StaticResource Panel}" Padding="18,13"
+            BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="3dxGC" FontSize="19" FontWeight="Bold"
+                     Foreground="{StaticResource Accent}"/>
+          <TextBlock Text="3DXChat Control Panel" Margin="12,0,0,0" FontSize="12"
+                     Foreground="{StaticResource TextDim}" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+          <Ellipse x:Name="DotElevated" Width="8" Height="8" Fill="{StaticResource Warn}"
+                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+          <TextBlock x:Name="TxtElevated" Text="unelevated" FontSize="11"
+                     Foreground="{StaticResource Warn}" VerticalAlignment="Center" Margin="0,0,18,0"/>
+          <Ellipse x:Name="DotGame" Width="8" Height="8" Fill="{StaticResource TextDim}"
+                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+          <TextBlock x:Name="TxtGameState" Text="game not running" FontSize="11"
+                     Foreground="{StaticResource TextDim}" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- tabs -->
+    <TabControl Grid.Row="1" x:Name="Tabs" Background="{StaticResource Bg}"
+                BorderThickness="0" Padding="18,14">
+
+      <!-- MEMORY -->
+      <TabItem Header="Memory">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <!-- graph row takes the slack; governor sizes to its content -->
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <UniformGrid Grid.Row="0" Rows="1" Columns="4" Margin="0,0,0,14">
+            <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12" Margin="0,0,9,0">
+              <StackPanel>
+                <TextBlock Text="SYSTEM FREE" Style="{StaticResource Label}"/>
+                <TextBlock x:Name="TxtSysFree" Text="--" Style="{StaticResource Metric}"/>
+                <TextBlock x:Name="TxtSysPct" Text="--" Style="{StaticResource Label}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12" Margin="0,0,9,0">
+              <StackPanel>
+                <TextBlock Text="GAME WORKING SET" Style="{StaticResource Label}"/>
+                <TextBlock x:Name="TxtGameWS" Text="--" Style="{StaticResource Metric}"/>
+                <TextBlock x:Name="TxtGamePeak" Text="--" Style="{StaticResource Label}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12" Margin="0,0,9,0">
+              <StackPanel>
+                <TextBlock Text="GAME PRIVATE" Style="{StaticResource Label}"/>
+                <TextBlock x:Name="TxtGamePriv" Text="--" Style="{StaticResource Metric}"/>
+                <TextBlock Text="commit - only in-proc unload frees this"
+                           Style="{StaticResource Label}" TextWrapping="Wrap"/>
+              </StackPanel>
+            </Border>
+            <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
+              <StackPanel>
+                <TextBlock Text="RECLAIMED THIS SESSION" Style="{StaticResource Label}"/>
+                <TextBlock x:Name="TxtReclaimed" Text="0 MB" Style="{StaticResource Metric}"
+                           Foreground="{StaticResource Good}"/>
+                <TextBlock x:Name="TxtTrimCount" Text="0 trims" Style="{StaticResource Label}"/>
+              </StackPanel>
+            </Border>
+          </UniformGrid>
+
+          <Grid Grid.Row="1" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="290"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="{StaticResource Panel}" CornerRadius="6"
+                    Padding="15,12" Margin="0,0,9,0">
+              <!-- Grid, not StackPanel: the Canvas has no intrinsic height, so
+                   it must be given a star row to stretch into. -->
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                  <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Text="Memory over time" Style="{StaticResource H2}"/>
+                <Canvas Grid.Row="1" x:Name="GraphCanvas" MinHeight="130"
+                        Background="Transparent" ClipToBounds="True"/>
+                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                  <Rectangle Width="11" Height="3" Fill="{StaticResource Accent}" VerticalAlignment="Center"/>
+                  <TextBlock Text="game working set" Style="{StaticResource Label}" Margin="5,0,16,0"/>
+                  <Rectangle Width="11" Height="3" Fill="{StaticResource Good}" VerticalAlignment="Center"/>
+                  <TextBlock Text="system free %" Style="{StaticResource Label}" Margin="5,0,0,0"/>
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <Border Grid.Column="1" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
+              <!-- ScrollViewer so a short window scrolls these rather than
+                   silently clipping the lower buttons off the panel. -->
+              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel>
+                <TextBlock Text="Manual operations" Style="{StaticResource H2}"/>
+                <Button x:Name="BtnTrimGame" Style="{StaticResource Primary}"
+                        Content="Trim Game  (no admin needed)"/>
+                <Separator Background="{StaticResource Line}" Margin="0,5"/>
+                <TextBlock Text="RAMMap equivalents - need admin" Style="{StaticResource Label}"
+                           Margin="0,0,0,6" TextWrapping="Wrap"/>
+                <Button x:Name="BtnWorkingSets" Content="Empty Working Sets"/>
+                <Button x:Name="BtnSysWS"       Content="Empty System Working Set"/>
+                <Button x:Name="BtnModified"    Content="Empty Modified Page List"/>
+                <Button x:Name="BtnStandby"     Content="Empty Standby List"/>
+                <Button x:Name="BtnLowPrio"     Content="Empty Priority 0 Standby"/>
+                <Button x:Name="BtnEmptyAll"    Content="Empty All (all five)"/>
+              </StackPanel>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Border Grid.Row="2" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,9">
+                <TextBlock Text="Governor" Style="{StaticResource H2}" VerticalAlignment="Center"/>
+                <TextBlock Text="profile" Style="{StaticResource Label}" Margin="18,0,7,0"
+                           VerticalAlignment="Center"/>
+                <ComboBox x:Name="CmbProfile" Width="150" VerticalAlignment="Center"/>
+                <Button x:Name="BtnGovernor" Style="{StaticResource Primary}"
+                        Content="Start" Width="100" Margin="12,0,0,0"/>
+                <TextBlock x:Name="TxtGovState" Text="stopped" Style="{StaticResource Label}"
+                           VerticalAlignment="Center" Margin="12,0,0,0"/>
+              </StackPanel>
+              <ListBox Grid.Row="1" x:Name="LstLog" Height="150"/>
+            </Grid>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <!-- MODS -->
+      <TabItem Header="Mods">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="340"/>
+          </Grid.ColumnDefinitions>
+
+          <Border Grid.Column="0" Background="{StaticResource Panel}" CornerRadius="6"
+                  Padding="15,12" Margin="0,0,9,0">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <TextBlock Grid.Row="0" Text="Installed mods" Style="{StaticResource H2}"/>
+              <ListBox Grid.Row="1" x:Name="LstMods" FontFamily="Segoe UI" FontSize="12"/>
+              <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,9,0,0">
+                <Button x:Name="BtnValidate" Content="Validate all"/>
+                <Button x:Name="BtnOpenMods" Content="Open mods folder"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <Border Grid.Column="1" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
+            <StackPanel>
+              <TextBlock Text="Client-side-only policy" Style="{StaticResource H2}"/>
+              <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextDim}"
+                         Margin="0,0,0,10"
+                         Text="Mods declaring these capabilities are refused at load. There is no config override, and the in-process guard enforces it again at patch time."/>
+              <ListBox x:Name="LstForbidden" Background="Transparent" BorderThickness="0"
+                       Foreground="{StaticResource Bad}" Height="110"/>
+              <Separator Background="{StaticResource Line}" Margin="0,12"/>
+              <TextBlock Text="In-process runtime" Style="{StaticResource H2}"/>
+              <TextBlock x:Name="TxtRuntimeState" Text="not present" FontSize="12"
+                         Foreground="{StaticResource TextDim}" Margin="0,0,0,9"/>
+              <Button x:Name="BtnRuntimeDocs" Content="Installation instructions"/>
+            </StackPanel>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <!-- LOGS -->
+      <TabItem Header="Logs">
+        <StackPanel>
+          <TextBlock Text="Game log analysis" Style="{StaticResource H2}"/>
+          <TextBlock Text="Runs the existing toolkit scripts in a new console window."
+                     Style="{StaticResource Label}" Margin="0,0,0,12"/>
+          <WrapPanel>
+            <Button x:Name="BtnAnalyzeLog"  Content="Analyze Game Log"/>
+            <Button x:Name="BtnWatchLog"    Content="Watch Log (live)"/>
+            <Button x:Name="BtnQuickDiag"   Content="Quick Diagnostic"/>
+            <Button x:Name="BtnWorlds"      Content="Diagnose Community Worlds"/>
+            <Button x:Name="BtnOpenPlayerLog" Content="Open Player.log folder"/>
+          </WrapPanel>
+        </StackPanel>
+      </TabItem>
+
+      <!-- NETWORK -->
+      <TabItem Header="Network">
+        <StackPanel>
+          <TextBlock Text="Connectivity and connections" Style="{StaticResource H2}"/>
+          <TextBlock Text="Read-only diagnostics against the game's own servers."
+                     Style="{StaticResource Label}" Margin="0,0,0,12"/>
+          <WrapPanel>
+            <Button x:Name="BtnTestConn"    Content="Test Connectivity"/>
+            <Button x:Name="BtnMonitorConn" Content="Monitor Connections"/>
+            <Button x:Name="BtnCapture"     Content="Capture Traffic"/>
+          </WrapPanel>
+        </StackPanel>
+      </TabItem>
+
+      <!-- CACHE -->
+      <TabItem Header="Cache">
+        <StackPanel>
+          <TextBlock Text="Cache analysis" Style="{StaticResource H2}"/>
+          <WrapPanel>
+            <Button x:Name="BtnHttpCache"  Content="Analyze HTTP Cache"/>
+            <Button x:Name="BtnLibrary"    Content="Analyze Library Index"/>
+            <Button x:Name="BtnChatHist"   Content="Analyze Chat History"/>
+            <Button x:Name="BtnOpenCache"  Content="Open cache folder"/>
+          </WrapPanel>
+        </StackPanel>
+      </TabItem>
+
+      <!-- MAINTENANCE -->
+      <TabItem Header="Maintenance">
+        <StackPanel>
+          <TextBlock Text="Repair and maintenance" Style="{StaticResource H2}"/>
+          <TextBlock Text="Clear-Cache and Repair-Installation modify game data. Read their output before confirming anything."
+                     Style="{StaticResource Label}" Margin="0,0,0,12" TextWrapping="Wrap"/>
+          <WrapPanel>
+            <Button x:Name="BtnRepairCheck" Content="Health Check"/>
+            <Button x:Name="BtnBackup"      Content="Backup Config"/>
+            <Button x:Name="BtnClearCache"  Content="Clear Cache"/>
+            <Button x:Name="BtnRepair"      Content="Repair Installation"/>
+          </WrapPanel>
+        </StackPanel>
+      </TabItem>
+
+    </TabControl>
+
+    <!-- status bar -->
+    <Border Grid.Row="2" Background="{StaticResource Panel}" Padding="18,7"
+            BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+      <Grid>
+        <TextBlock x:Name="TxtStatus" Text="Ready" FontSize="11"
+                   Foreground="{StaticResource TextDim}"/>
+        <TextBlock x:Name="TxtVersion" Text="3DXModKit v1.0.0" FontSize="11"
+                   HorizontalAlignment="Right" Foreground="{StaticResource TextDim}"/>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

@@ -1,0 +1,18 @@
+{
+  "id": "runtime-bridge",
+  "name": "Runtime Bridge",
+  "version": "1.0.0",
+  "description": "Connects the external host to the in-process ModKit runtime. Asks the game to release unreferenced Unity assets before the governor trims its working set, so the trim operates on a genuinely smaller process rather than shuffling pages that are about to fault back in. Degrades to a no-op when the runtime plugin is not installed.",
+  "author": "3DXModKit",
+  "tier": "host",
+  "entry": "Mod.ps1",
+  "loadPriority": 5,
+  "gameVersion": "471",
+  "capabilities": [
+    "process.query",
+    "ipc.runtime",
+    "ui.console"
+  ],
+  "dependencies": [],
+  "conflicts": []
+}
