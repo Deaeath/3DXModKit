@@ -497,12 +497,7 @@ $miEmpty.Add_Click({
 [void]$menu.Items.Add('-')
 
 $miExit = $menu.Items.Add('Exit')
-$miExit.Add_Click({
-    Stop-Governor
-    $tray.Visible = $false
-    $tray.Dispose()
-    $win.Close()
-})
+$miExit.Add_Click({ $win.Close() })
 
 $tray.ContextMenuStrip = $menu
 $tray.Add_MouseDoubleClick({ $win.Show(); $win.WindowState = 'Normal'; $win.Activate() })
@@ -510,15 +505,46 @@ $tray.Add_MouseDoubleClick({ $win.Show(); $win.WindowState = 'Normal'; $win.Acti
 # Minimise hides to tray instead of the taskbar.
 $win.Add_StateChanged({
     if ($win.WindowState -eq 'Minimized') {
-        $win.Hide()
-        $tray.ShowBalloonTip(1500, '3dxGC', 'Still governing in the background.', 'Info')
+        try {
+            $win.Hide()
+            $tray.ShowBalloonTip(1500, '3dxGC', 'Still governing in the background.', 'Info')
+        } catch { }
     }
 })
 
-$win.Add_Closing({
+# Closing runs cleanup once; Closed stops the message loop so the script can
+# return past Dispatcher.Run() below and the process can exit. Guarded so
+# Exit's Close() and an OS close-box click can never double-run the cleanup.
+$Script:IsShuttingDown = $false
+function Stop-App {
+    if ($Script:IsShuttingDown) { return }
+    $Script:IsShuttingDown = $true
     Stop-Governor
     $tray.Visible = $false
     $tray.Dispose()
+}
+
+$win.Add_Closing({ Stop-App })
+$win.Add_Closed({ $win.Dispatcher.InvokeShutdown() })
+
+# A window shown via ShowDialog() cannot be Hide()-den - WPF throws
+# InvalidOperationException, and because nothing here caught it, that
+# exception used to take the whole process down the instant the window was
+# minimised: window, tray icon, everything, unrecoverable. Show() plus running
+# the dispatcher directly (InvokeShutdown above is what lets this call
+# return) avoids the trap entirely.
+#
+# Dispatcher.UnhandledException is the same fix applied generally: any other
+# uncaught exception on the UI thread was equally fatal before. Marking it
+# Handled keeps the panel open and logs the error instead of silently killing
+# the app.
+$win.Dispatcher.add_UnhandledException({
+    param($sender, $e)
+    try {
+        Add-LogLine ("[Error] " + $e.Exception.GetType().Name + ": " + $e.Exception.Message)
+        Set-Status ("Error: " + $e.Exception.Message) $Colours.Bad
+    } catch { }
+    $e.Handled = $true
 })
 
 # ---------------------------------------------------------------------------
@@ -534,13 +560,8 @@ Update-ModList
 Update-Telemetry
 Set-Status 'Ready.'
 
-if ($Minimized) {
-    $win.WindowState = 'Minimized'
-    [void]$win.ShowDialog()
-} else {
-    [void]$win.ShowDialog()
-}
+$win.Show()
+if ($Minimized) { $win.WindowState = 'Minimized' }
+[Windows.Threading.Dispatcher]::Run()
 
 $timer.Stop()
-$tray.Visible = $false
-$tray.Dispose()
