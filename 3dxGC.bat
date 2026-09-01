@@ -53,5 +53,5 @@ echo   Per-process trimming works; system-wide purges will report as skipped.
 echo.
 
 :run
-start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0gui\Start-Gui.ps1"
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0gui\Start-Gui.ps1" %*
 exit /b 0

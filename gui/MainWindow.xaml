@@ -175,12 +175,35 @@
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <!-- graph row takes the slack; governor sizes to its content -->
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
 
-          <UniformGrid Grid.Row="0" Rows="1" Columns="4" Margin="0,0,0,14">
+          <!-- Reflects real governor state - this is the answer to "what do I
+               do now / can I close this" that used to require asking on
+               Discord. Colour and text are updated from code, not static. -->
+          <Border Grid.Row="0" x:Name="BannerOnboarding" Background="#FF15321F"
+                  BorderBrush="{StaticResource Good}" BorderThickness="1"
+                  CornerRadius="6" Padding="14,10" Margin="0,0,0,14">
+            <!-- Grid, not a horizontal StackPanel: a StackPanel gives its
+                 children unconstrained width in the stacking direction, so
+                 TextWrapping="Wrap" never actually triggers and long text
+                 silently clips at the panel edge instead of wrapping. -->
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Ellipse Grid.Column="0" x:Name="DotOnboarding" Width="10" Height="10"
+                       Fill="{StaticResource Good}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+              <TextBlock Grid.Column="1" x:Name="TxtOnboarding" TextWrapping="Wrap"
+                         VerticalAlignment="Center" FontSize="12" Text="Starting..."/>
+            </Grid>
+          </Border>
+
+          <UniformGrid Grid.Row="1" Rows="1" Columns="4" Margin="0,0,0,14">
             <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12" Margin="0,0,9,0">
               <StackPanel>
                 <TextBlock Text="SYSTEM FREE" Style="{StaticResource Label}"/>
@@ -213,7 +236,7 @@
             </Border>
           </UniformGrid>
 
-          <Grid Grid.Row="1" Margin="0,0,0,14">
+          <Grid Grid.Row="2" Margin="0,0,0,14">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="290"/>
@@ -263,7 +286,7 @@
             </Border>
           </Grid>
 
-          <Border Grid.Row="2" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
+          <Border Grid.Row="3" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
             <Grid>
               <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -278,6 +301,8 @@
                         Content="Start" Width="100" Margin="12,0,0,0"/>
                 <TextBlock x:Name="TxtGovState" Text="stopped" Style="{StaticResource Label}"
                            VerticalAlignment="Center" Margin="12,0,0,0"/>
+                <CheckBox x:Name="ChkAutoStart" Content="Start with Windows"
+                          Margin="24,0,0,0" VerticalAlignment="Center"/>
               </StackPanel>
               <ListBox Grid.Row="1" x:Name="LstLog" Height="150"/>
             </Grid>

@@ -99,7 +99,14 @@ cd 3DXModKit
 
 ### GUI
 
-`gui\Start-Gui.ps1` is a WPF control panel with a system tray icon. Minimising hides it to the tray and the governor keeps running; the tray menu has one-click **Trim game** and **Empty all**.
+`gui\Start-Gui.ps1` is a WPF control panel with a system tray icon, designed so there is nothing to figure out:
+
+- **Starts governing on its own.** No click required — it launches with your last-used profile (or `default`, the first time) already running.
+- **Minimising hides it to the tray**, not the taskbar — the governor keeps running. Closing the window (the X button, or **Exit** in the tray menu) stops it for real.
+- **Updates itself.** It checks for a newer release every few hours and on launch, and if one exists, downloads, verifies, and applies it — restarting itself automatically once the swap is done. No download-and-reinstall, ever.
+- **"Start with Windows"** checkbox (next to the profile picker) so you never have to open it at all — check it once, forget the app exists.
+
+The onboarding banner at the top of the Memory tab always tells you the current state in plain language. That's the whole manual.
 
 Tabs: **Memory** (live graph, manual RAMMap operations, governor + streaming log), **Mods** (validation and the refusal policy), and **Logs / Network / Cache / Maintenance**, which front the scripts from the companion [3DXChat Debug Toolkit](#companion-toolkit) if you have it.
 
@@ -109,6 +116,8 @@ Launch it elevated to enable the four system-wide operations.
 .\gui\Start-Gui.ps1 -Minimized                       # start straight to tray
 .\gui\Start-Gui.ps1 -ToolkitPath "D:\path\to\toolkit"
 ```
+
+Auto-update is on by default. To turn it off, set `"AutoUpdateEnabled": false` in `config\gui-settings.json` (created on first run) — there's no UI toggle for this by design; it's a power-user escape hatch, not something most people should need.
 
 ### Command line
 

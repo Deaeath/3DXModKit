@@ -17,6 +17,18 @@
 Set-StrictMode -Version Latest
 
 $Script:ModKitRoot = $PSScriptRoot
+$Script:ModKitRepo = 'Deaeath/3DXModKit'
+
+function Get-ModKitVersion {
+    <#
+    .SYNOPSIS
+        The installed version, read from the module manifest - the single
+        source of truth so the CLI, GUI, and updater never disagree.
+    #>
+    [CmdletBinding()]
+    param()
+    (Test-ModuleManifest -Path (Join-Path $Script:ModKitRoot '3DXModKit.psd1')).Version.ToString()
+}
 
 # --- load native layer once -------------------------------------------------
 if (-not ('ThreeDX.ModKit.Native.MemOps' -as [type])) {
@@ -49,7 +61,7 @@ function Get-ModKitInfo {
     $game = @(Get-Process -Name '3DXChat' -ErrorAction SilentlyContinue)
 
     [pscustomobject]@{
-        ModKitVersion = '1.0.0'
+        ModKitVersion = Get-ModKitVersion
         ModKitRoot    = $Script:ModKitRoot
         Elevated      = [ThreeDX.ModKit.Native.MemOps]::IsElevated()
         TotalRamGB    = $sys.TotalPhysGB
@@ -251,8 +263,68 @@ function Start-ModKit {
     }
 }
 
+function Test-ModKitUpdate {
+    <#
+    .SYNOPSIS
+        Checks GitHub Releases for a newer version. Never throws - a network
+        hiccup here must never take down the caller, since this runs
+        unattended in the background.
+    .OUTPUTS
+        PSCustomObject: UpdateAvailable, LocalVersion, RemoteVersion,
+        DownloadUrl, ReleaseUrl, Error.
+    #>
+    [CmdletBinding()]
+    param([int]$TimeoutSec = 10)
+
+    $local = Get-ModKitVersion
+    $result = [pscustomobject]@{
+        UpdateAvailable = $false
+        LocalVersion    = $local
+        RemoteVersion   = $null
+        DownloadUrl     = $null
+        ReleaseUrl      = $null
+        Error           = $null
+    }
+
+    try {
+        $uri = "https://api.github.com/repos/$Script:ModKitRepo/releases/latest"
+        $resp = Invoke-RestMethod -Uri $uri -Headers @{
+            'User-Agent' = '3DXModKit-updater'
+            'Accept'     = 'application/vnd.github+json'
+        } -TimeoutSec $TimeoutSec -UseBasicParsing
+
+        $tag = [string]$resp.tag_name
+        $remote = $tag.TrimStart('v', 'V')
+
+        $asset = $resp.assets | Where-Object { $_.name -like '3DXModKit-*.zip' } | Select-Object -First 1
+        if (-not $asset) {
+            $result.Error = "release '$tag' has no 3DXModKit-*.zip asset"
+            return $result
+        }
+
+        $result.RemoteVersion = $remote
+        $result.DownloadUrl   = $asset.browser_download_url
+        $result.ReleaseUrl    = $resp.html_url
+
+        try {
+            $result.UpdateAvailable = ([version]$remote) -gt ([version]$local)
+        } catch {
+            # Non-semver tag - fall back to a straight string inequality so a
+            # weird tag still surfaces as "different" rather than being
+            # silently treated as no-op.
+            $result.UpdateAvailable = ($remote -ne $local)
+        }
+    } catch {
+        $result.Error = $_.Exception.Message
+    }
+
+    return $result
+}
+
 Export-ModuleMember -Function @(
     'Get-ModKitInfo'
+    'Get-ModKitVersion'
+    'Test-ModKitUpdate'
     'Test-ModKitMods'
     'Invoke-ModKitEmpty'
     'Start-ModKit'
