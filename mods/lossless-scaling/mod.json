@@ -1,0 +1,18 @@
+{
+  "id": "lossless-scaling",
+  "name": "Lossless Scaling Status",
+  "version": "1.0.0",
+  "description": "Reports whether Lossless Scaling (a paid Steam app, App ID 993090) is installed and whether a '3DXChat' profile exists in its own settings. Chosen deliberately over an in-process/game-directory approach: it captures and reprocesses the game's rendered window entirely externally, via AI upscaling (LS1) and optional frame generation - zero files added to the game's own install, nothing for its anti-tamper systems to react to. This mod never writes anything and never purchases anything - it only reads status. Tuning the profile (or creating one) is a separate, explicitly-run script: bootstrap\\Setup-LosslessScaling.ps1, which also opens the Steam store page if the app isn't owned yet, since only the user's own account can buy it.",
+  "author": "3DXModKit",
+  "tier": "host",
+  "entry": "Mod.ps1",
+  "loadPriority": 55,
+  "gameVersion": "471",
+  "capabilities": [
+    "process.query",
+    "fs.read.thirdparty",
+    "ui.console"
+  ],
+  "dependencies": [],
+  "conflicts": []
+}
