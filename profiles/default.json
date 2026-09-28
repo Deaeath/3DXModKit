@@ -2,7 +2,8 @@
   "description": "Adaptive memory management. Releases Unity assets in-process (when the runtime plugin is installed), then trims the working set - but only while the game is backgrounded, minimised, or idle. System-wide purges only under real pressure.",
   "enabled": [
     "runtime-bridge",
-    "3dxgc"
+    "3dxgc",
+    "lossless-scaling"
   ],
   "config": {
     "runtime-bridge": {

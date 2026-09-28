@@ -196,6 +196,18 @@ function New-ModKitContext {
             if ($this._host.GamePid -le 0) { return $false }
             return ([ThreeDX.ModKit.Native.MemOps]::GetForegroundPid() -eq $this._host.GamePid)
         }
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetGameDirectory -Value {
+            # Directory containing the running 3DXChat.exe, or $null if the
+            # game isn't currently running. Lets a host-tier mod that needs
+            # to inspect (or, via its own explicit bootstrap script, write
+            # into) the install directory find it without hardcoding a path.
+            if ($this._host.GamePid -le 0) { return $null }
+            try {
+                $p = Get-Process -Id $this._host.GamePid -ErrorAction Stop
+                if ($p.Path) { return (Split-Path -Parent $p.Path) }
+            } catch { }
+            return $null
+        }
         $ctx | Add-Member -MemberType ScriptMethod -Name IsGameMinimized -Value {
             if ($this._host.GamePid -le 0) { return $false }
             return [ThreeDX.ModKit.Native.MemOps]::IsProcessMinimized($this._host.GamePid)
