@@ -1,0 +1,19 @@
+{
+  "id": "radio-streamer",
+  "name": "Radio Streamer",
+  "version": "1.0.0",
+  "description": "Companion for 3DX Radio Streamer, a separate desktop app that airs music to your own Shoutcast/Icecast station for a room radio. Reports whether it is installed and running, which audio source it uses, and the exact URL to paste into the room's radio; optionally starts it with the game. The streaming itself happens entirely inside that app, talking to your radio host - this mod never opens a socket, never touches the game or its protocol, and never logs or copies the station password from the app's settings. Installing is a separate, explicitly-run script: bootstrap\\Install-RadioStreamer.ps1.",
+  "author": "3DXModKit",
+  "tier": "host",
+  "entry": "Mod.ps1",
+  "loadPriority": 60,
+  "gameVersion": "471",
+  "capabilities": [
+    "process.query",
+    "process.launch.companion",
+    "fs.read.thirdparty",
+    "ui.console"
+  ],
+  "dependencies": [],
+  "conflicts": []
+}

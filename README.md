@@ -239,6 +239,8 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 │   └── Host/Runtime.ps1          event bus, scheduler, capability-gated context
 ├── mods/
 │   ├── 3dxgc/                    adaptive working-set governor (3dxGC)
+│   ├── profile-studio/           companion status + opener for 3DX Profile Studio
+│   ├── radio-streamer/           companion status + launcher for 3DX Radio Streamer
 │   └── runtime-bridge/           host <-> in-process bridge
 ├── runtime/
 │   ├── bootstrap/                BepInEx install / build / uninstall
@@ -246,6 +248,42 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 ├── profiles/                     modpack definitions
 └── logs/
 ```
+
+---
+
+## Companion apps
+
+Two separate apps pair with the modkit. Neither runs inside the game or touches its files. The control panel's **Mods** tab has an **Open** and an **Install / Update** button for each:
+
+| App | What it is | Open |
+|---|---|---|
+| [3DX Profile Studio](https://github.com/Deaeath/3dx-profile-studio) | A Word-style editor for your profile and gift texts, with an AI writer that takes a key from any provider | In your browser. If it isn't installed yet, you can install it or use [the online version](https://deaeath.github.io/3dx-profile-studio/) |
+| [3DX Radio Streamer](https://github.com/Deaeath/3dx-radio-streamer) | Airs music to your own Shoutcast or Icecast station for a room radio | Starts the app |
+
+**Install** downloads the latest GitHub release, checks it against the release's `SHA256SUMS.txt` and asks once more before installing. It runs in its own window, so you can see every step. The same scripts work on their own: `mods\profile-studio\bootstrap\Install-ProfileStudio.ps1` and `mods\radio-streamer\bootstrap\Install-RadioStreamer.ps1`.
+
+Each app also has a mod that reports on it when the game starts.
+
+### Profile Studio mod
+
+```
+[profile-studio]  3DX Profile Studio v1.0.0 is installed: ...\3DX Profile Studio.html
+```
+
+Set `openWithGame` to `true` in its config to open the editor whenever the game starts. This uses `ui.open.companion`, which only opens an existing `.html` page outside the game directory.
+
+### Radio Streamer mod
+
+```
+[radio-streamer]  3DX Radio Streamer is installed (...) and running.
+[radio-streamer]  Station 'My Radio' on Listen2MyRadio, airing one app only (Spotify.exe).
+[radio-streamer]  Room radio URL: http://109.169.23.84:17263/;
+```
+
+Paste that URL into the room's radio. For Shoutcast v1 servers (Listen2MyRadio's free plan), it ends in `/;` so the server sends audio rather than its status page.
+
+- **Starting it with the game:** set `launchWithGame` to `true` in the mod's config. This uses `process.launch.companion`, which only starts an existing `.exe` outside the game directory.
+- **Client-side only:** the streaming happens inside the separate app. The mod never opens a socket and never logs the station password from the app's settings.
 
 ---
 

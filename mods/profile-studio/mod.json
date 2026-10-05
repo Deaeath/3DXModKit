@@ -1,0 +1,19 @@
+{
+  "id": "profile-studio",
+  "name": "Profile Studio",
+  "version": "1.0.0",
+  "description": "Companion for 3DX Profile Studio, a Word-style editor for 3DXChat profile and gift texts (a single local web page). Reports whether it is installed and which version, and can open it in your browser when the game starts. The editor itself runs in the browser: this mod never opens a socket and never touches the game, its files or its protocol. Installing is a separate, explicitly-run script, bootstrap\\Install-ProfileStudio.ps1, or the Open Profile Studio button on the control panel's Mods tab.",
+  "author": "3DXModKit",
+  "tier": "host",
+  "entry": "Mod.ps1",
+  "loadPriority": 65,
+  "gameVersion": "471",
+  "capabilities": [
+    "process.query",
+    "ui.open.companion",
+    "fs.read.thirdparty",
+    "ui.console"
+  ],
+  "dependencies": [],
+  "conflicts": []
+}

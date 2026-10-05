@@ -303,6 +303,55 @@ function New-ModKitContext {
         }
     }
 
+    # --- process.launch.companion -----------------------------------------
+    # Starts a separate desktop app as its own process. Only an existing .exe
+    # outside the game directory, so it can never launch or wrap the client.
+    if ($caps -contains 'process.launch.companion') {
+        $ctx | Add-Member -MemberType ScriptMethod -Name StartCompanion -Value {
+            param([string]$ExePath, [string[]]$Arguments = @())
+            if (-not $ExePath -or -not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { return $false }
+            $full = [System.IO.Path]::GetFullPath($ExePath)
+            if ([System.IO.Path]::GetExtension($full) -ne '.exe') { return $false }
+            if ($this._host.GamePid -gt 0) {
+                try {
+                    $game = Get-Process -Id $this._host.GamePid -ErrorAction Stop
+                    if ($game.Path) {
+                        $gameDir = (Split-Path -Parent $game.Path).TrimEnd('\') + '\'
+                        if ($full.StartsWith($gameDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+                    }
+                } catch { }
+            }
+            try {
+                $startArgs = @{ FilePath = $full; WorkingDirectory = (Split-Path -Parent $full) }
+                if ($Arguments.Count) { $startArgs.ArgumentList = $Arguments }
+                Start-Process @startArgs
+                return $true
+            } catch { return $false }
+        }
+    }
+
+    # --- ui.open.companion -------------------------------------------------
+    # Opens a companion web app (a local .html page) in the default browser.
+    # Only existing .html/.htm files outside the game directory.
+    if ($caps -contains 'ui.open.companion') {
+        $ctx | Add-Member -MemberType ScriptMethod -Name OpenCompanionPage -Value {
+            param([string]$PagePath)
+            if (-not $PagePath -or -not (Test-Path -LiteralPath $PagePath -PathType Leaf)) { return $false }
+            $full = [System.IO.Path]::GetFullPath($PagePath)
+            if ([System.IO.Path]::GetExtension($full) -notin @('.html', '.htm')) { return $false }
+            if ($this._host.GamePid -gt 0) {
+                try {
+                    $game = Get-Process -Id $this._host.GamePid -ErrorAction Stop
+                    if ($game.Path) {
+                        $gameDir = (Split-Path -Parent $game.Path).TrimEnd('\') + '\'
+                        if ($full.StartsWith($gameDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+                    }
+                } catch { }
+            }
+            try { Start-Process -FilePath $full; return $true } catch { return $false }
+        }
+    }
+
     # --- fs.write.config --------------------------------------------------
     if ($caps -contains 'fs.write.config') {
         $ctx | Add-Member -MemberType ScriptMethod -Name SaveState -Value {

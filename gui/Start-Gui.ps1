@@ -709,6 +709,64 @@ $UI.BtnRuntimeDocs.Add_Click({
     [void][Windows.MessageBox]::Show($runtimeHelp, 'In-process runtime', 'OK', 'Information')
 })
 
+# companion apps (Mods tab)
+function Update-Companions {
+    foreach ($c in (Get-ModKitCompanions)) {
+        $text = if ($c.Installed) {
+            $v = if ($c.Version) { "v$($c.Version) installed" } else { 'installed' }
+            if ($c.Running) { "$v, running" } else { $v }
+        } elseif ($c.Kind -eq 'page') { 'not installed - Open can install it or use the online version' } else { 'not installed' }
+        $txt, $install = if ($c.Id -eq 'profile-studio') { $UI.TxtProfileStudio, $UI.BtnInstallProfileStudio } else { $UI.TxtRadioStreamer, $UI.BtnInstallRadioStreamer }
+        $txt.Text = $text
+        $txt.Foreground = New-Brush $(if ($c.Installed) { $Colours.Good } else { $Colours.Dim })
+        $install.Content = if ($c.Installed) { 'Update' } else { 'Install' }
+    }
+}
+
+function Start-CompanionInstaller {
+    param($Companion, [switch]$Open)
+    if (-not (Test-Path -LiteralPath $Companion.Installer)) {
+        Set-Status "Installer not found: $($Companion.Installer)" $Colours.Bad
+        return
+    }
+    $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-File', ('"' + $Companion.Installer + '"'))
+    if ($Open -and $Companion.Kind -eq 'page') { $argList += '-Open' }
+    Start-Process powershell.exe -ArgumentList $argList
+    Set-Status "Installing $($Companion.Name) in a new window. Come back to this tab to see it." $Colours.Blue
+}
+
+function Open-Companion {
+    param([string]$Id)
+    $c = Get-ModKitCompanions | Where-Object { $_.Id -eq $Id }
+    if ($c.Installed) {
+        Start-Process -FilePath $c.Path
+        Set-Status "Opened $($c.Name)." $Colours.Good
+        return
+    }
+    if ($c.Kind -eq 'page') {
+        $answer = [Windows.MessageBox]::Show(
+            "$($c.Name) isn't installed yet.`n`nYes: install it now. It downloads the latest release and checks it against its checksum, then opens it.`nNo: open the online version instead.",
+            $c.Name, 'YesNoCancel', 'Question')
+        if ($answer -eq 'Yes') { Start-CompanionInstaller $c -Open }
+        elseif ($answer -eq 'No') { Start-Process $c.WebUrl; Set-Status "Opened the online $($c.Name)." $Colours.Good }
+    } else {
+        $answer = [Windows.MessageBox]::Show(
+            "$($c.Name) isn't installed yet. Install it now?`n`nIt downloads the latest release, checks it against its checksum and asks once more before running the installer.",
+            $c.Name, 'YesNo', 'Question')
+        if ($answer -eq 'Yes') { Start-CompanionInstaller $c }
+    }
+}
+
+$UI.BtnOpenProfileStudio.Add_Click({ Open-Companion 'profile-studio' })
+$UI.BtnOpenRadioStreamer.Add_Click({ Open-Companion 'radio-streamer' })
+$UI.BtnInstallProfileStudio.Add_Click({ Start-CompanionInstaller (Get-ModKitCompanions | Where-Object { $_.Id -eq 'profile-studio' }) })
+$UI.BtnInstallRadioStreamer.Add_Click({ Start-CompanionInstaller (Get-ModKitCompanions | Where-Object { $_.Id -eq 'radio-streamer' }) })
+$UI.Tabs.Add_SelectionChanged({
+    param($s, $e)
+    # SelectionChanged bubbles up from list boxes inside the tabs too
+    if ($e.OriginalSource -eq $UI.Tabs -and $UI.Tabs.SelectedItem.Header -eq 'Mods') { Update-Companions }
+})
+
 # toolkit tabs
 $localLow = Join-Path $env:LOCALAPPDATA '..\LocalLow\SexGameDevil\3DXChat'
 
@@ -841,6 +899,7 @@ $timer.Add_Tick({ try { Update-Telemetry } catch { } })
 $timer.Start()
 
 Update-ModList
+Update-Companions
 
 # The whole point of this redesign: protection starts itself. No click
 # required - "do I have to click anything" should simply not come up.

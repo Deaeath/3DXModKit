@@ -3,7 +3,9 @@
   "enabled": [
     "runtime-bridge",
     "3dxgc",
-    "lossless-scaling"
+    "lossless-scaling",
+    "radio-streamer",
+    "profile-studio"
   ],
   "config": {
     "runtime-bridge": {
