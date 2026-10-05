@@ -337,6 +337,36 @@
 
           <Border Grid.Column="1" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
             <StackPanel>
+              <TextBlock Text="Companion apps" Style="{StaticResource H2}"/>
+              <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextDim}" Margin="0,0,0,10"
+                         Text="Separate apps that never touch the game. Open installs the latest release first if needed, checked against its published checksum."/>
+              <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,7">
+                  <TextBlock Text="3DX Profile Studio" Foreground="{StaticResource Text}" FontWeight="SemiBold" FontSize="12"/>
+                  <TextBlock x:Name="TxtProfileStudio" Text="checking..." FontSize="11" Foreground="{StaticResource TextDim}" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1" x:Name="BtnOpenProfileStudio" Style="{StaticResource Primary}" Content="Open" MinWidth="64"/>
+                <Button Grid.Column="2" x:Name="BtnInstallProfileStudio" Content="Install" Margin="0,0,0,7" MinWidth="72"/>
+              </Grid>
+              <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,7">
+                  <TextBlock Text="3DX Radio Streamer" Foreground="{StaticResource Text}" FontWeight="SemiBold" FontSize="12"/>
+                  <TextBlock x:Name="TxtRadioStreamer" Text="checking..." FontSize="11" Foreground="{StaticResource TextDim}" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1" x:Name="BtnOpenRadioStreamer" Style="{StaticResource Primary}" Content="Open" MinWidth="64"/>
+                <Button Grid.Column="2" x:Name="BtnInstallRadioStreamer" Content="Install" Margin="0,0,0,7" MinWidth="72"/>
+              </Grid>
+              <Separator Background="{StaticResource Line}" Margin="0,8,0,12"/>
               <TextBlock Text="Client-side-only policy" Style="{StaticResource H2}"/>
               <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextDim}"
                          Margin="0,0,0,10"

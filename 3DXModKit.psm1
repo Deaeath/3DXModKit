@@ -321,7 +321,78 @@ function Test-ModKitUpdate {
     return $result
 }
 
+# ---------------------------------------------------------------------------
+# Companion apps
+# ---------------------------------------------------------------------------
+# Separate apps the modkit can install and open: they run on their own, never
+# inside the game. The control panel's Mods tab and the matching mods use this.
+
+$Script:ProfileStudioDir = Join-Path $env:LOCALAPPDATA 'Programs\3DX Profile Studio'
+
+function Get-ModKitCompanions {
+    <#
+    .SYNOPSIS
+        3DX Radio Streamer and 3DX Profile Studio: whether each is installed,
+        where, which version, and the script that installs it.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $radioExe = $null
+    $uninstallRoots = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+                        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+                        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+    foreach ($root in $uninstallRoots) {
+        try {
+            $dir = (Get-ItemProperty -Path (Join-Path $root '{6F1C2B7A-3D58-4E8B-9A57-2C41E7A0B3D9}_is1') -Name 'InstallLocation' -ErrorAction Stop).InstallLocation
+            $exe = Join-Path $dir '3DX Radio Streamer.exe'
+            if (Test-Path -LiteralPath $exe -PathType Leaf) { $radioExe = $exe; break }
+        } catch { }
+    }
+    if (-not $radioExe) {
+        foreach ($dir in @((Join-Path $env:LOCALAPPDATA 'Programs\3DX Radio Streamer'), (Join-Path $env:ProgramFiles '3DX Radio Streamer'))) {
+            $exe = Join-Path $dir '3DX Radio Streamer.exe'
+            if (Test-Path -LiteralPath $exe -PathType Leaf) { $radioExe = $exe; break }
+        }
+    }
+    $radioVersion = $null
+    if ($radioExe) { $radioVersion = (Get-Item -LiteralPath $radioExe).VersionInfo.ProductVersion }
+
+    $page = Join-Path $Script:ProfileStudioDir '3DX Profile Studio.html'
+    $pageVersion = $null
+    $versionFile = Join-Path $Script:ProfileStudioDir 'version.txt'
+    if (Test-Path -LiteralPath $versionFile) { $pageVersion = (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim() }
+
+    @(
+        [pscustomobject]@{
+            Id        = 'radio-streamer'
+            Name      = '3DX Radio Streamer'
+            Kind      = 'app'
+            Path      = $radioExe
+            Installed = [bool]$radioExe
+            Version   = $radioVersion
+            Running   = @(Get-Process -Name '3DX Radio Streamer' -ErrorAction SilentlyContinue).Count -gt 0
+            Installer = Join-Path $Script:ModKitRoot 'mods\radio-streamer\bootstrap\Install-RadioStreamer.ps1'
+            WebUrl    = $null
+            Repo      = 'https://github.com/Deaeath/3dx-radio-streamer'
+        }
+        [pscustomobject]@{
+            Id        = 'profile-studio'
+            Name      = '3DX Profile Studio'
+            Kind      = 'page'
+            Path      = $(if (Test-Path -LiteralPath $page -PathType Leaf) { $page } else { $null })
+            Installed = (Test-Path -LiteralPath $page -PathType Leaf)
+            Version   = $pageVersion
+            Running   = $false
+            Installer = Join-Path $Script:ModKitRoot 'mods\profile-studio\bootstrap\Install-ProfileStudio.ps1'
+            WebUrl    = 'https://deaeath.github.io/3dx-profile-studio/'
+            Repo      = 'https://github.com/Deaeath/3dx-profile-studio'
+        }
+    )
+}
+
 Export-ModuleMember -Function @(
+    'Get-ModKitCompanions'
     'Get-ModKitInfo'
     'Get-ModKitVersion'
     'Test-ModKitUpdate'

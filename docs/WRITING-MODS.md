@@ -69,6 +69,8 @@ See the full catalog:
 | `process.priority` | `SetGamePriority` |
 | `ipc.runtime` | `SendRuntimeCommand`, `IsRuntimeAvailable` — machine-local named pipe |
 | `fs.write.config` | `SaveState`, `LoadState` |
+| `process.launch.companion` | `StartCompanion` — starts an existing `.exe` outside the game directory, never the game |
+| `ui.open.companion` | `OpenCompanionPage` — opens an existing `.html` page outside the game directory in the default browser |
 | `ui.console` | logging (always available in practice) |
 
 ### Refused unconditionally
