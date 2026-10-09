@@ -241,6 +241,7 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 │   ├── 3dxgc/                    adaptive working-set governor (3dxGC)
 │   ├── profile-studio/           companion status + opener for 3DX Profile Studio
 │   ├── radio-streamer/           companion status + launcher for 3DX Radio Streamer
+│   ├── world-editor/             companion status + launcher for 3DX World Editor
 │   └── runtime-bridge/           host <-> in-process bridge
 ├── runtime/
 │   ├── bootstrap/                BepInEx install / build / uninstall
@@ -253,14 +254,15 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 
 ## Companion apps
 
-Two separate apps pair with the modkit. Neither runs inside the game or touches its files. The control panel's **Mods** tab has an **Open** and an **Install / Update** button for each:
+Three separate apps pair with the modkit. None of them runs inside the game or changes its files. The control panel's **Mods** tab has an **Open** and an **Install / Update** button for each:
 
 | App | What it is | Open |
 |---|---|---|
 | [3DX Profile Studio](https://github.com/Deaeath/3dx-profile-studio) | A Word-style editor for your profile and gift texts, with an AI writer that takes a key from any provider | In your browser. If it isn't installed yet, you can install it or use [the online version](https://deaeath.github.io/3dx-profile-studio/) |
 | [3DX Radio Streamer](https://github.com/Deaeath/3dx-radio-streamer) | Airs music to your own Shoutcast or Icecast station for a room radio | Starts the app |
+| [3DX World Editor](https://github.com/Deaeath/3dx-world-editor) | Edits `.world` files in 3D with the game's real models, without the in-game editor's lag | Starts the app, which opens the editor in your browser. If it isn't installed yet, you can install it or use [the online version](https://deaeath.github.io/3dx-world-editor/) |
 
-**Install** downloads the latest GitHub release, checks it against the release's `SHA256SUMS.txt` and asks once more before installing. It runs in its own window, so you can see every step. The same scripts work on their own: `mods\profile-studio\bootstrap\Install-ProfileStudio.ps1` and `mods\radio-streamer\bootstrap\Install-RadioStreamer.ps1`.
+**Install** downloads the latest GitHub release, checks it against the release's `SHA256SUMS.txt` and asks once more before installing. It runs in its own window, so you can see every step. The same scripts work on their own: `mods\profile-studio\bootstrap\Install-ProfileStudio.ps1`, `mods\radio-streamer\bootstrap\Install-RadioStreamer.ps1` and `mods\world-editor\bootstrap\Install-WorldEditor.ps1`.
 
 Each app also has a mod that reports on it when the game starts.
 
@@ -284,6 +286,15 @@ Paste that URL into the room's radio. For Shoutcast v1 servers (Listen2MyRadio's
 
 - **Starting it with the game:** set `launchWithGame` to `true` in the mod's config. This uses `process.launch.companion`, which only starts an existing `.exe` outside the game directory.
 - **Client-side only:** the streaming happens inside the separate app. The mod never opens a socket and never logs the station password from the app's settings.
+
+### World Editor mod
+
+```
+[world-editor]  3DX World Editor v1.0.0 is installed (...) and not running.
+[world-editor]  Game models read on 2026-10-08; delete ...\3DXWorldEditor\assets after a big game update to read them again.
+```
+
+The editor reads the game's data files (read-only) the first time it opens, to show the real models, and keeps its copy in `%LOCALAPPDATA%\3DXWorldEditor`. Set `launchWithGame` to `true` in the mod's config to start it with the game (`process.launch.companion`, an existing `.exe` outside the game directory only).
 
 ---
 

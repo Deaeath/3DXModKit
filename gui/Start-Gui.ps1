@@ -715,8 +715,12 @@ function Update-Companions {
         $text = if ($c.Installed) {
             $v = if ($c.Version) { "v$($c.Version) installed" } else { 'installed' }
             if ($c.Running) { "$v, running" } else { $v }
-        } elseif ($c.Kind -eq 'page') { 'not installed - Open can install it or use the online version' } else { 'not installed' }
-        $txt, $install = if ($c.Id -eq 'profile-studio') { $UI.TxtProfileStudio, $UI.BtnInstallProfileStudio } else { $UI.TxtRadioStreamer, $UI.BtnInstallRadioStreamer }
+        } elseif ($c.WebUrl) { 'not installed - Open can install it or use the online version' } else { 'not installed' }
+        $txt, $install = switch ($c.Id) {
+            'profile-studio' { $UI.TxtProfileStudio, $UI.BtnInstallProfileStudio }
+            'world-editor'   { $UI.TxtWorldEditor, $UI.BtnInstallWorldEditor }
+            default          { $UI.TxtRadioStreamer, $UI.BtnInstallRadioStreamer }
+        }
         $txt.Text = $text
         $txt.Foreground = New-Brush $(if ($c.Installed) { $Colours.Good } else { $Colours.Dim })
         $install.Content = if ($c.Installed) { 'Update' } else { 'Install' }
@@ -730,7 +734,7 @@ function Start-CompanionInstaller {
         return
     }
     $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-File', ('"' + $Companion.Installer + '"'))
-    if ($Open -and $Companion.Kind -eq 'page') { $argList += '-Open' }
+    if ($Open -and $Companion.WebUrl) { $argList += '-Open' }   # the installers with an online version take -Open
     Start-Process powershell.exe -ArgumentList $argList
     Set-Status "Installing $($Companion.Name) in a new window. Come back to this tab to see it." $Colours.Blue
 }
@@ -743,7 +747,7 @@ function Open-Companion {
         Set-Status "Opened $($c.Name)." $Colours.Good
         return
     }
-    if ($c.Kind -eq 'page') {
+    if ($c.WebUrl) {
         $answer = [Windows.MessageBox]::Show(
             "$($c.Name) isn't installed yet.`n`nYes: install it now. It downloads the latest release and checks it against its checksum, then opens it.`nNo: open the online version instead.",
             $c.Name, 'YesNoCancel', 'Question')
@@ -761,6 +765,8 @@ $UI.BtnOpenProfileStudio.Add_Click({ Open-Companion 'profile-studio' })
 $UI.BtnOpenRadioStreamer.Add_Click({ Open-Companion 'radio-streamer' })
 $UI.BtnInstallProfileStudio.Add_Click({ Start-CompanionInstaller (Get-ModKitCompanions | Where-Object { $_.Id -eq 'profile-studio' }) })
 $UI.BtnInstallRadioStreamer.Add_Click({ Start-CompanionInstaller (Get-ModKitCompanions | Where-Object { $_.Id -eq 'radio-streamer' }) })
+$UI.BtnOpenWorldEditor.Add_Click({ Open-Companion 'world-editor' })
+$UI.BtnInstallWorldEditor.Add_Click({ Start-CompanionInstaller (Get-ModKitCompanions | Where-Object { $_.Id -eq 'world-editor' }) })
 $UI.Tabs.Add_SelectionChanged({
     param($s, $e)
     # SelectionChanged bubbles up from list boxes inside the tabs too

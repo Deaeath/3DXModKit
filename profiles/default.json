@@ -5,7 +5,8 @@
     "3dxgc",
     "lossless-scaling",
     "radio-streamer",
-    "profile-studio"
+    "profile-studio",
+    "world-editor"
   ],
   "config": {
     "runtime-bridge": {

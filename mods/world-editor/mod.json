@@ -1,0 +1,19 @@
+{
+  "id": "world-editor",
+  "name": "World Editor",
+  "version": "1.0.0",
+  "description": "Companion for 3DX World Editor, a separate app for editing 3DXChat .world files in 3D without the in-game editor's lag. Reports whether it is installed, which version, whether it is running and whether it has read the game's models yet; optionally starts it with the game. The editor itself only reads the game's data files (never writes to the game folder) to show the real models, and keeps its own copy in %LOCALAPPDATA%\\3DXWorldEditor. This mod never opens a socket and never touches the game, its files or its protocol. Installing is a separate, explicitly-run script, bootstrap\\Install-WorldEditor.ps1, or the Open / Install buttons on the control panel's Mods tab. No install needed for the online version: https://deaeath.github.io/3dx-world-editor/",
+  "author": "3DXModKit",
+  "tier": "host",
+  "entry": "Mod.ps1",
+  "loadPriority": 66,
+  "gameVersion": "471",
+  "capabilities": [
+    "process.query",
+    "process.launch.companion",
+    "fs.read.thirdparty",
+    "ui.console"
+  ],
+  "dependencies": [],
+  "conflicts": []
+}

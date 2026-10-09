@@ -360,6 +360,19 @@
                   <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,7">
+                  <TextBlock Text="3DX World Editor" Foreground="{StaticResource Text}" FontWeight="SemiBold" FontSize="12"/>
+                  <TextBlock x:Name="TxtWorldEditor" Text="checking..." FontSize="11" Foreground="{StaticResource TextDim}" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1" x:Name="BtnOpenWorldEditor" Style="{StaticResource Primary}" Content="Open" MinWidth="64"/>
+                <Button Grid.Column="2" x:Name="BtnInstallWorldEditor" Content="Install" Margin="0,0,0,7" MinWidth="72"/>
+              </Grid>
+              <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,7">
                   <TextBlock Text="3DX Radio Streamer" Foreground="{StaticResource Text}" FontWeight="SemiBold" FontSize="12"/>
                   <TextBlock x:Name="TxtRadioStreamer" Text="checking..." FontSize="11" Foreground="{StaticResource TextDim}" TextWrapping="Wrap"/>
                 </StackPanel>

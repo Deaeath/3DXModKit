@@ -328,11 +328,12 @@ function Test-ModKitUpdate {
 # inside the game. The control panel's Mods tab and the matching mods use this.
 
 $Script:ProfileStudioDir = Join-Path $env:LOCALAPPDATA 'Programs\3DX Profile Studio'
+$Script:WorldEditorDir = Join-Path $env:LOCALAPPDATA 'Programs\3DX World Editor'
 
 function Get-ModKitCompanions {
     <#
     .SYNOPSIS
-        3DX Radio Streamer and 3DX Profile Studio: whether each is installed,
+        3DX Radio Streamer, 3DX Profile Studio and 3DX World Editor: whether each is installed,
         where, which version, and the script that installs it.
     #>
     [CmdletBinding()]
@@ -363,6 +364,11 @@ function Get-ModKitCompanions {
     $versionFile = Join-Path $Script:ProfileStudioDir 'version.txt'
     if (Test-Path -LiteralPath $versionFile) { $pageVersion = (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim() }
 
+    $worldExe = Join-Path $Script:WorldEditorDir '3DXWorldEditor.exe'
+    $worldVersion = $null
+    $worldVersionFile = Join-Path $Script:WorldEditorDir 'version.txt'
+    if (Test-Path -LiteralPath $worldVersionFile) { $worldVersion = (Get-Content -LiteralPath $worldVersionFile -TotalCount 1).Trim() }
+
     @(
         [pscustomobject]@{
             Id        = 'radio-streamer'
@@ -387,6 +393,18 @@ function Get-ModKitCompanions {
             Installer = Join-Path $Script:ModKitRoot 'mods\profile-studio\bootstrap\Install-ProfileStudio.ps1'
             WebUrl    = 'https://deaeath.github.io/3dx-profile-studio/'
             Repo      = 'https://github.com/Deaeath/3dx-profile-studio'
+        }
+        [pscustomobject]@{
+            Id        = 'world-editor'
+            Name      = '3DX World Editor'
+            Kind      = 'app'
+            Path      = $(if (Test-Path -LiteralPath $worldExe -PathType Leaf) { $worldExe } else { $null })
+            Installed = (Test-Path -LiteralPath $worldExe -PathType Leaf)
+            Version   = $worldVersion
+            Running   = @(Get-Process -Name '3DXWorldEditor' -ErrorAction SilentlyContinue).Count -gt 0
+            Installer = Join-Path $Script:ModKitRoot 'mods\world-editor\bootstrap\Install-WorldEditor.ps1'
+            WebUrl    = 'https://deaeath.github.io/3dx-world-editor/'
+            Repo      = 'https://github.com/Deaeath/3dx-world-editor'
         }
     )
 }
