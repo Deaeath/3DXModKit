@@ -129,13 +129,13 @@ Auto-update is on by default. To turn it off, set `"AutoUpdateEnabled": false` i
 
 Run the shell **as Administrator** to unlock the system-wide purges. Without elevation, per-process trimming still works and the system-wide operations report themselves as skipped rather than failing silently.
 
-### Runtime tier (writes into the game directory)
+### Runtime tier (adds files to the game folder)
 
-Read `runtime/bootstrap/Install-BepInEx.ps1`'s header before running it. Summary of what you are accepting:
+The runtime is a BepInEx plugin, so installing it adds a few files next to `3DXChat.exe`:
 
-- The game ships a **PGP-signed `integrity.conf`** in both `Game\` and `Launcher\`. Adding files diverges from that manifest.
-- 3DXChat is a live service tied to your account; loading code into the client is a ToS question, not only a technical one.
-- The launcher may restore modified files and silently undo the install.
+- Every added file is recorded, and `Uninstall-BepInEx.ps1` puts the folder back exactly as it was.
+- A game update or launcher repair can restore the original files, which just removes the install — run the installer again.
+- Like the rest of 3DXModKit it is client-side only: it asks the game to free memory and never touches the network or the chat protocol.
 
 ```powershell
 cd runtime\bootstrap
@@ -326,4 +326,4 @@ Pull requests that add capabilities to the forbidden namespaces (`net.*`, `game.
 
 [MIT](LICENSE).
 
-Not affiliated with, endorsed by, or supported by SexGameDevil. 3DXChat is their product. This is an independent, client-side tool that manages memory on your own machine; installing the optional in-process tier modifies your game directory, which is your decision and your risk.
+Not affiliated with, endorsed by, or supported by SexGameDevil. 3DXChat is their product. This is an independent, client-side tool that manages memory on your own machine. The optional in-process tier adds files to your game folder; uninstalling removes them exactly.

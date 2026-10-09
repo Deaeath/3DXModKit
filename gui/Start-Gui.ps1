@@ -694,8 +694,8 @@ The in-process runtime is a BepInEx 6 (IL2CPP) plugin. It is what actually
 releases Unity asset memory. Working-set trimming alone only evicts resident
 pages, which fault back in.
 
-Installing it writes into the game directory, which diverges from the
-PGP-signed integrity.conf shipped in Game\ and Launcher\.
+Installing it adds a few files next to 3DXChat.exe. A game update or
+launcher repair may remove them again - just re-run the installer.
 
     cd runtime\bootstrap
     .\Install-BepInEx.ps1 -GamePath "<...>\3DXChat\Game"

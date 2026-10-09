@@ -7,22 +7,14 @@
     Everything it touches is backed up first, and Uninstall-BepInEx.ps1 restores
     the directory to exactly its prior state.
 
-    Read this before running it:
+    Good to know:
 
-      * The game ships a PGP-signed integrity.conf in both Game\ and Launcher\.
-        Adding files to Game\ will diverge from that manifest. Whether the
-        launcher enforces the manifest, and what it does on mismatch, is the
-        publisher's call and can change with any patch.
+      * It adds BepInEx's files next to 3DXChat.exe. 3DXModKit is client-side
+        only: nothing here touches the network, the chat protocol or anything
+        server-side - the plugin only asks the game to free memory.
 
-      * 3DXChat is a live online service tied to your account. Loading code
-        into the client is a Terms of Service question, not just a technical
-        one. 3DXModKit is client-side only by design and does not touch the
-        network, the protocol, or server-authoritative state - but that is a
-        property of this framework, not a guarantee about how the operator
-        interprets client modification.
-
-      * The launcher may restore or re-download modified files, silently
-        undoing this install.
+      * A game update or launcher repair can put the original files back,
+        which simply removes this install. Run this script again afterwards.
 
     Nothing here is hidden from you and nothing runs without -Confirm.
 
@@ -88,15 +80,6 @@ if (Get-Process -Name '3DXChat' -ErrorAction SilentlyContinue) {
 $existing = Join-Path $GamePath 'BepInEx'
 if ((Test-Path -LiteralPath $existing) -and -not $Force) {
     throw "BepInEx already present at $existing. Re-run with -Force to reinstall."
-}
-
-# --- integrity notice -------------------------------------------------------
-
-$integrity = Join-Path $GamePath 'integrity.conf'
-if (Test-Path -LiteralPath $integrity) {
-    Write-Warn2 'integrity.conf is present in this directory (PGP-signed manifest).'
-    Write-Warn2 'Installing will add files the manifest does not describe.'
-    Write-Host ''
 }
 
 if (-not $PSCmdlet.ShouldProcess($GamePath, "Install BepInEx $Version (IL2CPP x64)")) {
