@@ -22,7 +22,7 @@ $Script:ModKitCapabilities = @{
     'memory.trim.system'    = 'System-wide standby/modified-list purges (requires admin)'
     'fs.read.gamedata'      = 'Read game install + LocalLow data directories'
     'fs.write.config'       = 'Write within the modkit config directory only'
-    'fs.write.gamedir'      = 'Write into the game install directory (integrity-affecting)'
+    'fs.write.gamedir'      = 'Write into the game install directory (adds files next to the game)'
     'fs.read.thirdparty'    = 'Read a companion desktop application''s own settings, entirely outside the game directory'
     'fs.write.thirdparty'   = 'Write a companion desktop application''s own settings, entirely outside the game directory (e.g. a third-party scaling/capture tool''s config file)'
     'process.launch.companion' = 'Start a companion desktop application installed outside the game directory (never the game itself)'
@@ -254,9 +254,9 @@ function Test-ModKitManifest {
         $errors.Add("tier 'runtime' must declare 'runtime.load'")
     }
 
-    # --- integrity warning -------------------------------------------------
+    # --- game-folder note ---------------------------------------------------
     if ($Manifest.Capabilities -contains 'fs.write.gamedir') {
-        $warnings.Add("declares 'fs.write.gamedir' - writes into the game install will diverge from the signed integrity.conf")
+        $warnings.Add("declares 'fs.write.gamedir' - adds files to the game folder (a game update or repair may remove them)")
     }
 
     [pscustomobject]@{

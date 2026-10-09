@@ -1,6 +1,6 @@
 @{
     RootModule        = '3DXModKit.psm1'
-    ModuleVersion     = '1.2.0'
+    ModuleVersion     = '1.2.1'
     GUID              = 'b4e7c2a1-9f3d-4e58-a6c1-7d2b8e4f1a90'
     Author            = '3DXModKit'
     Description       = 'Client-side-only modular mod framework for 3DXChat (Unity 2021.3.45f2, IL2CPP), with adaptive memory management.'

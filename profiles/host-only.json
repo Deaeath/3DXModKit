@@ -1,5 +1,5 @@
 {
-  "description": "External tier only. No in-process runtime, nothing written to the game directory, no divergence from integrity.conf. Working-set trimming and system purges only.",
+  "description": "External tier only. No in-process runtime and nothing added to the game folder. Working-set trimming and system purges only.",
   "enabled": [
     "3dxgc"
   ],
