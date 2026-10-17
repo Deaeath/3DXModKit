@@ -177,7 +177,7 @@ function Start-ModKit {
     $bus    = New-ModKitEventBus
     $hostObj= New-ModKitHost -RootPath $Script:ModKitRoot -Logger $logger -Bus $bus -GameProcessName $GameProcessName
 
-    $logger.Info('modkit', "3DXModKit 1.0.0 starting (profile '$ProfileName')")
+    $logger.Info('modkit', "3DXModKit $(Get-ModKitVersion) starting (profile '$ProfileName')")
     if (-not [ThreeDX.ModKit.Native.MemOps]::IsElevated()) {
         $logger.Warn('modkit', 'not elevated - system-wide purges unavailable, per-process trimming still works')
     }
