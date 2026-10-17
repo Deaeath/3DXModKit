@@ -185,8 +185,8 @@ A profile is a named set of enabled mods plus their config.
 
 | Profile | Behaviour |
 |---|---|
-| `default` | Adaptive. Unload + trim only when backgrounded, minimised, or idle. System purges only when critical. |
-| `aggressive` | Closest to RAMMap-by-hand. Short debounces, periodic sweeps, purges whenever RAM dips. Expect occasional hitching. |
+| `default` | Adaptive. Unload + trim when backgrounded, minimised, or idle, and whenever the game passes 4 GB of RAM or free RAM drops under 1.5 GB. System purges only when critical. |
+| `aggressive` | Closest to RAMMap-by-hand. Short debounces, periodic sweeps, trims at 3 GB, purges whenever RAM dips. Expect occasional hitching. |
 | `conservative` | Never touches anything while the game is in use. No system purges. |
 | `host-only` | External tier only. Nothing written to the game directory. |
 
