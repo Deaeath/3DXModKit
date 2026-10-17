@@ -31,6 +31,8 @@
             TotalPurges     = 0
             TotalFreedMB    = 0.0
             SessionPeakWSMB = 0.0
+            RamArmed        = $true
+            LastRamTrimAt   = [datetime]::MinValue
         }
 
         # ------------------------------------------------------------------
@@ -38,12 +40,13 @@
         # ------------------------------------------------------------------
 
         $shouldSkip = {
-            param($reason)
+            param($reason, $ignoreFocus = $false)
 
             if (-not $cfg.enabled) { return 'mod disabled' }
             if ($ctx.GetGamePid() -le 0) { return 'game not running' }
 
-            if ($cfg.safety.neverTrimWhenForeground -and $ctx.IsGameForeground()) {
+            if (-not $ignoreFocus -and
+                $cfg.safety.neverTrimWhenForeground -and $ctx.IsGameForeground()) {
                 # Minimised-but-foreground is not a real state; if it is
                 # minimised we always allow the trim through.
                 if (-not $ctx.IsGameMinimized()) { return 'game has focus' }
@@ -67,9 +70,9 @@
         # captures the finished version of the previous. Without this the
         # handlers below would capture only their own locals and lose these.
         $doTrim = {
-            param($reason)
+            param($reason, $ignoreFocus = $false)
 
-            $skip = & $shouldSkip $reason
+            $skip = & $shouldSkip $reason $ignoreFocus
             if ($skip) {
                 # Always visible at Debug - "nothing happened" is otherwise
                 # indistinguishable from a broken trigger. logEverySkip only
@@ -169,6 +172,7 @@
             $mem = $ctx.GetProcessMemory($e.Pid)
             $ctx.Log("governing pid $($e.Pid) (working set $($mem.WorkingSetMB) MB)")
             $state.BlurredAt = $null
+            $state.RamArmed  = $true
         }.GetNewClosure())
 
         $ctx.On('game.stopped', {
@@ -221,7 +225,8 @@
             }.GetNewClosure())
         }
 
-        # Tick drives the debounced blur trim and the periodic sweep.
+        # Tick drives the debounced blur trim, the RAM-amount trigger and the
+        # periodic sweep.
         $ctx.On('tick', {
             param($e)
 
@@ -230,6 +235,49 @@
                 if ($elapsed -ge $cfg.triggers.onBlur.delaySeconds) {
                     $state.BlurredAt = $null
                     & $doTrim ('backgrounded {0:N0}s' -f $elapsed)
+                }
+            }
+
+            # RAM amount: fires on how much memory is in use rather than on
+            # time or focus. Edge-triggered - one trim per climb past the
+            # line, re-armed once the reading drops back under it - so a game
+            # that genuinely needs the memory is not re-trimmed every tick it
+            # stays high. cooldownSeconds bounds how often a climb can fire.
+            $ram = $cfg.triggers.onRamAmount
+            if ($ram -and $ram.enabled -and $ctx.GetGamePid() -gt 0) {
+                $over   = $null
+                $sysLow = $false
+
+                $mem = $ctx.GetProcessMemory($ctx.GetGamePid())
+                if ($ram.gameAboveMB -gt 0 -and $null -ne $mem -and
+                    $mem.WorkingSetMB -ge $ram.gameAboveMB) {
+                    $over = 'game {0} MB >= {1} MB' -f $mem.WorkingSetMB, $ram.gameAboveMB
+                }
+
+                $sys    = $ctx.GetSystemMemory()
+                $freeMB = [math]::Round($sys.AvailPhysBytes / 1MB, 0)
+                if ($ram.systemFreeBelowMB -gt 0 -and $freeMB -lt $ram.systemFreeBelowMB) {
+                    $sysLow = $true
+                    if (-not $over) {
+                        $over = 'system free {0} MB < {1} MB' -f $freeMB, $ram.systemFreeBelowMB
+                    }
+                }
+
+                if (-not $over) {
+                    $state.RamArmed = $true
+                } elseif ($state.RamArmed) {
+                    $since = ((Get-Date) - $state.LastRamTrimAt).TotalSeconds
+                    if ($since -ge $ram.cooldownSeconds) {
+                        # Only a trim that actually landed disarms; a skipped
+                        # one (rate limit, focus) stays armed and retries.
+                        $trimsBefore = $state.TotalTrims
+                        & $doTrim "ram: $over" ([bool]$ram.whileFocused)
+                        if ($state.TotalTrims -gt $trimsBefore) {
+                            $state.RamArmed      = $false
+                            $state.LastRamTrimAt = Get-Date
+                        }
+                        if ($sysLow) { & $doSystemPurge "ram: $over" $sys.AvailPercent }
+                    }
                 }
             }
 
@@ -244,7 +292,7 @@
             }
         }.GetNewClosure())
 
-        $ctx.Log("ready - triggers: blur=$($cfg.triggers.onBlur.enabled) minimize=$($cfg.triggers.onMinimize.enabled) idle=$($cfg.triggers.onIdle.enabled) lowmem=$($cfg.triggers.onLowMemory.enabled)")
+        $ctx.Log("ready - triggers: blur=$($cfg.triggers.onBlur.enabled) minimize=$($cfg.triggers.onMinimize.enabled) idle=$($cfg.triggers.onIdle.enabled) lowmem=$($cfg.triggers.onLowMemory.enabled) ram=$(if ($cfg.triggers.onRamAmount) { $cfg.triggers.onRamAmount.enabled } else { $false })")
         if (-not $ctx.IsElevated()) {
             $ctx.LogWarn('unelevated: per-process trimming active, system-wide purges unavailable')
         }

@@ -10,6 +10,7 @@
         "onMinimize":  { "enabled": true, "delaySeconds": 10 },
         "onIdle":      { "enabled": true, "idleSeconds": 600 },
         "onLowMemory": { "enabled": true },
+        "onRamAmount": { "enabled": true, "whileFocused": false },
         "periodic":    { "enabled": false }
       },
       "thresholds": {

@@ -9,6 +9,7 @@
         "onBlur":     { "enabled": true, "delaySeconds": 5 },
         "onMinimize": { "enabled": true, "delaySeconds": 1 },
         "onIdle":     { "enabled": true, "idleSeconds": 60 },
+        "onRamAmount": { "enabled": true, "gameAboveMB": 3072, "systemFreeBelowMB": 2048, "cooldownSeconds": 60 },
         "periodic":   { "enabled": true, "everySeconds": 180, "onlyWhenBackgrounded": false }
       },
       "thresholds": {

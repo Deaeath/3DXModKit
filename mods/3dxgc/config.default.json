@@ -6,6 +6,7 @@
     "onMinimize":  { "enabled": true,  "delaySeconds": 3  },
     "onIdle":      { "enabled": true,  "idleSeconds": 180 },
     "onLowMemory": { "enabled": true },
+    "onRamAmount": { "enabled": true,  "gameAboveMB": 4096, "systemFreeBelowMB": 1536, "whileFocused": true, "cooldownSeconds": 120 },
     "periodic":    { "enabled": true,  "everySeconds": 600, "onlyWhenBackgrounded": true }
   },
 
