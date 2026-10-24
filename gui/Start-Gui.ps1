@@ -39,6 +39,41 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase,
                        System.Windows.Forms, System.Drawing
 
+# ---------------------------------------------------------------------------
+# One control panel per session
+#
+# Two of them means two governors trimming the same game and fighting over
+# it - easy to get by opening 3dxGC.bat while the "start with Windows" copy
+# sits in the tray. The short wait covers the updater's relaunch, which
+# starts just after the old instance exits.
+# ---------------------------------------------------------------------------
+
+$Script:InstanceMutex = $null
+$haveInstance = $false
+try {
+    $Script:InstanceMutex = New-Object System.Threading.Mutex($false, 'Local\3dxGC-ControlPanel')
+    try {
+        $haveInstance = $Script:InstanceMutex.WaitOne([TimeSpan]::FromSeconds(5))
+    } catch {
+        # The previous owner exited without releasing it - ours now.
+        $inner = $_.Exception
+        while ($inner -and $inner -isnot [System.Threading.AbandonedMutexException]) { $inner = $inner.InnerException }
+        $haveInstance = [bool]$inner
+    }
+} catch {
+    # Access denied: held by a copy running at a different elevation.
+    $haveInstance = $false
+}
+if (-not $haveInstance) {
+    if (-not $Minimized) {
+        [System.Windows.MessageBox]::Show(
+            "3dxGC is already running - look for its icon in the system tray.`n`n" +
+            "To run it as administrator instead, right-click the tray icon, choose Exit 3dxGC, then open 3dxGC.bat again.",
+            '3dxGC', 'OK', 'Information') | Out-Null
+    }
+    exit 0
+}
+
 $ModKitRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $ModKitRoot '3DXModKit.psm1') -Force
 

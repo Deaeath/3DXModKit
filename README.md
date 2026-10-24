@@ -118,6 +118,7 @@ cd 3DXModKit
 - **Minimising hides it to the tray**, not the taskbar — the governor keeps running. Closing the window (the X button, or **Exit** in the tray menu) stops it for real.
 - **Updates itself.** It checks for a newer release every few hours and on launch, and if one exists, downloads, verifies, and applies it — restarting itself automatically once the swap is done. No download-and-reinstall, ever.
 - **"Start with Windows"** checkbox (next to the profile picker) so you never have to open it at all — check it once, forget the app exists.
+- **Only one copy runs.** Opening it again while it's in the tray tells you so, instead of starting a second governor that would fight the first.
 
 The onboarding banner at the top of the Memory tab always tells you the current state in plain language. That's the whole manual.
 
