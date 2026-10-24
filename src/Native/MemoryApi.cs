@@ -11,6 +11,9 @@
 // Empty Standby List          -> PurgeStandbyList()         cmd 4
 // Empty Priority 0 Standby    -> PurgeLowPriorityStandby()  cmd 5
 //
+// GetKernelLeak() and RunLeakTest() find what no Empty operation can return:
+// exited processes a driver is still holding, each pinning page tables and pool.
+//
 // TrimProcess() is the targeted primitive and the only one that needs no
 // elevation - you may always trim the working set of a process you own. Every
 // system-wide operation needs admin plus an explicitly enabled privilege, so
@@ -141,6 +144,26 @@ namespace ThreeDX.ModKit.Native
         public double PeakWorkingSetMB { get { return Math.Round(PeakWorkingSetBytes / 1048576.0, 1); } }
     }
 
+    /// <summary>
+    /// Exited processes the kernel is still holding. A healthy PC has a few
+    /// dozen. A driver that keeps a reference to every process leaves one behind
+    /// per process ever started, each pinning its page tables and pool - memory
+    /// no process owns, that no trim or purge can return, and only a restart frees.
+    /// </summary>
+    public class KernelLeakSnapshot
+    {
+        // Measured on a 32 GB machine holding 313,537 exited processes: 9.3 GB of
+        // page tables, 7.7 GB of unlabelled kernel pages and 1.5 GB of pool.
+        public const double BytesPerHeldProcess = 58 * 1024;
+
+        public long ProcessObjects;      // live allocations under the 'Proc' pool tag
+        public int RunningProcesses;
+        public string Error;
+
+        public long HeldExited { get { return Math.Max(0, ProcessObjects - RunningProcesses); } }
+        public double HeldGB { get { return Math.Round(HeldExited * BytesPerHeldProcess / 1073741824.0, 2); } }
+    }
+
     #endregion
 
     public static class MemOps
@@ -148,6 +171,10 @@ namespace ThreeDX.ModKit.Native
         #region P/Invoke
 
         private const int SystemMemoryListInformation = 0x50;  // 80
+        private const int SystemPoolTagInformation = 0x16;     // 22
+        private const int STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xC0000004);
+        private const int ProcPoolTag = 0x636F7250;            // 'Proc', little-endian
+        private const uint STILL_ACTIVE = 259;
 
         // SYSTEM_MEMORY_LIST_COMMAND
         private const int MemoryEmptyWorkingSets = 2;
@@ -169,6 +196,13 @@ namespace ThreeDX.ModKit.Native
 
         [DllImport("ntdll.dll", SetLastError = true)]
         private static extern int NtSetSystemInformation(int InfoClass, IntPtr Info, int Length);
+
+        [DllImport("ntdll.dll")]
+        private static extern int NtQuerySystemInformation(int InfoClass, IntPtr Info, int Length, out int ReturnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint exitCode);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -348,6 +382,91 @@ namespace ThreeDX.ModKit.Native
             if (!GetLastInputInfo(ref lii)) return 0;
             uint ticks = (uint)Environment.TickCount;
             return (ticks - lii.dwTime) / 1000.0;
+        }
+
+        #endregion
+
+        #region Leak diagnostics
+
+        /// <summary>
+        /// Counts exited processes the kernel is still holding, from the 'Proc'
+        /// pool tag. Read-only and unprivileged; the same counter poolmon shows.
+        /// </summary>
+        public static KernelLeakSnapshot GetKernelLeak()
+        {
+            var s = new KernelLeakSnapshot();
+            try { s.RunningProcesses = Process.GetProcesses().Length; }
+            catch (Exception ex) { s.Error = ex.Message; return s; }
+
+            int size = 1 << 20;
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                IntPtr buf = Marshal.AllocHGlobal(size);
+                try
+                {
+                    int needed;
+                    int status = NtQuerySystemInformation(SystemPoolTagInformation, buf, size, out needed);
+                    if (status == STATUS_INFO_LENGTH_MISMATCH) { size = Math.Max(size * 2, needed + 65536); continue; }
+                    if (status != 0) { s.Error = "NtQuerySystemInformation -> 0x" + status.ToString("X8"); return s; }
+
+                    // SYSTEM_POOLTAG_INFORMATION (x64): ULONG Count, then 40-byte entries
+                    // from offset 8 - Tag @0, NonPagedAllocs @24, NonPagedFrees @28.
+                    int count = Marshal.ReadInt32(buf, 0);
+                    for (int i = 0; i < count; i++)
+                    {
+                        int off = 8 + i * 40;
+                        if ((Marshal.ReadInt32(buf, off) & 0x7FFFFFFF) != ProcPoolTag) continue;
+                        uint allocs = (uint)Marshal.ReadInt32(buf, off + 24);
+                        uint frees = (uint)Marshal.ReadInt32(buf, off + 28);
+                        s.ProcessObjects = unchecked(allocs - frees);
+                        return s;
+                    }
+                    s.Error = "'Proc' pool tag not found";
+                    return s;
+                }
+                finally { Marshal.FreeHGlobal(buf); }
+            }
+            s.Error = "pool tag table never fit the buffer";
+            return s;
+        }
+
+        /// <summary>
+        /// Starts <paramref name="count"/> short whoami.exe processes, closes every
+        /// handle to them, and returns how many the system still holds after they
+        /// exit. 0 is healthy; all of them means a driver is keeping every exited
+        /// process - and its memory - alive.
+        /// </summary>
+        public static int RunLeakTest(int count)
+        {
+            var pids = new List<int>();
+            string exe = Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\whoami.exe");
+            for (int i = 0; i < count; i++)
+            {
+                var psi = new ProcessStartInfo(exe);
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                using (var p = Process.Start(psi))
+                {
+                    p.StandardOutput.ReadToEnd();
+                    p.WaitForExit();
+                    pids.Add(p.Id);
+                }
+            }
+
+            // Give antivirus and other watchers time to drop their own short-lived handles.
+            System.Threading.Thread.Sleep(2500);
+
+            int held = 0;
+            foreach (int pid in pids)
+            {
+                IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                if (h == IntPtr.Zero) continue;
+                uint code;
+                if (GetExitCodeProcess(h, out code) && code != STILL_ACTIVE) held++;
+                CloseHandle(h);
+            }
+            return held;
         }
 
         #endregion

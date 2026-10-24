@@ -74,6 +74,19 @@ The host tier works fine on its own if you never install the runtime.
 
 ---
 
+## Leaks no trim can fix
+
+Sometimes the RAM is gone and the game isn't what's holding it. 3dxGC's **leak watch** checks every five minutes and says so in the log:
+
+- **Exited processes the kernel is still holding.** A buggy driver can keep a reference to every process that ever ran. Each one pins about 58 KB of page tables and pool, which no process owns and no RAMMap operation returns. On the machine this was found on, 313,537 of them held 18 GB of a 32 GB PC. 3dxGC counts them from the kernel's `Proc` pool tag (no admin needed) and runs a short leak test (six `whoami.exe`) to show whether it's still happening. The only cure is to update the driver and **Restart** — not Shut down, because Fast Startup carries kernel memory over.
+- **Processes that only grow.** An app whose private memory or handle count rises at almost every sample (for example +5 GB/h, or +2,000 handles/h) is reported by name, so you know which one to restart.
+- **Services with a known leak.** Services named in `leakWatch.restartServices` are restarted once they pass a handle count (default: `ArmouryCrateService` above 50,000). This needs administrator.
+- **Rival optimisers.** If another memory optimiser runs alongside 3dxGC, they fight, so 3dxGC tells you to close one.
+
+While the kernel is holding more than 4 GB, the RAM-amount trigger stops trimming the game in the foreground. The shortage isn't the game's, and trimming it would only cause stutter.
+
+---
+
 ## Install
 
 **[Download the latest release](https://github.com/Deaeath/3DXModKit/releases/latest)**, extract the folder anywhere, and double-click:
@@ -232,7 +245,7 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 │   ├── Start-Gui.ps1             WPF control panel + system tray
 │   └── MainWindow.xaml           layout
 ├── src/
-│   ├── Native/MemoryApi.cs       P/Invoke: all 5 RAMMap ops + telemetry
+│   ├── Native/MemoryApi.cs       P/Invoke: all 5 RAMMap ops, telemetry, leak diagnostics
 │   ├── Core/Manifest.ps1         schema, capability model, validation
 │   ├── Core/Resolver.ps1         discovery, dependency graph, load order
 │   ├── Core/Config.ps1           layered config (defaults < profile < user)

@@ -27,6 +27,16 @@
     "minSecondsBetweenPurges": 300
   },
 
+  "leakWatch": {
+    "enabled": true,
+    "everySeconds": 300,
+    "heldProcesses":   { "enabled": true, "warnAbove": 20000, "warnEveryMinutes": 60, "leakTest": true, "skipFocusedTrimAboveGB": 4.0 },
+    "processes":       { "enabled": true, "windowSamples": 6, "privateMBPerHour": 300, "minPrivateMB": 1024, "handlesPerHour": 2000, "minHandles": 20000, "warnEveryMinutes": 60,
+                         "ignore": ["3DXChat", "System", "Idle", "Memory Compression", "Registry"] },
+    "restartServices": { "enabled": true, "names": ["ArmouryCrateService"], "aboveHandles": 50000, "cooldownMinutes": 60 },
+    "competingOptimizers": ["WiseMemoryOptimzer", "WiseMemoryOptimizer", "MemReduct", "CleanMem", "RAMRush"]
+  },
+
   "companions": {
     "trimLauncher": true,
     "processNames": ["3DXLauncher"]

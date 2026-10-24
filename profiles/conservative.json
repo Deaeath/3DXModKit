@@ -18,6 +18,9 @@
       },
       "systemWide": {
         "enabled": false
+      },
+      "leakWatch": {
+        "restartServices": { "enabled": false }
       }
     }
   }

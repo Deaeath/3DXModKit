@@ -66,6 +66,8 @@ See the full catalog:
 | `process.query` | `GetGamePid`, `GetProcessMemory`, `GetSystemMemory`, `GetIdleSeconds`, `IsGameForeground`, `IsGameMinimized` |
 | `memory.trim.self` | `TrimGame`, `TrimProcess`, `TrimByName` — no elevation needed |
 | `memory.trim.system` | `PurgeStandbyList`, `FlushModifiedPageList`, `EmptySystemWorkingSet`, `EmptyAllWorkingSets`, `EmptyAll`, `IsElevated` — admin required |
+| `memory.diagnose` | `GetKernelLeak` (exited processes the kernel still holds), `RunLeakTest`, `GetProcessSample` |
+| `service.restart` | `GetServiceHandles`, `RestartService` — admin required |
 | `process.priority` | `SetGamePriority` |
 | `ipc.runtime` | `SendRuntimeCommand`, `IsRuntimeAvailable` — machine-local named pipe |
 | `fs.write.config` | `SaveState`, `LoadState` |

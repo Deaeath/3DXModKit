@@ -255,6 +255,56 @@ function New-ModKitContext {
         }
     }
 
+    # --- memory.diagnose --------------------------------------------------
+    # Finds memory that trimming can never return: exited processes a driver
+    # is still holding, and processes that only ever grow. Read-only, except
+    # that RunLeakTest starts a few short whoami.exe processes.
+    if ($caps -contains 'memory.diagnose') {
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetKernelLeak -Value {
+            return [ThreeDX.ModKit.Native.MemOps]::GetKernelLeak()
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name RunLeakTest -Value {
+            param([int]$Count = 6)
+            return [ThreeDX.ModKit.Native.MemOps]::RunLeakTest($Count)
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetProcessSample -Value {
+            # One row per process - only what growth tracking needs.
+            return @(Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+                [pscustomobject]@{
+                    Id           = $_.Id
+                    Name         = $_.ProcessName
+                    PrivateBytes = $_.PrivateMemorySize64
+                    Handles      = $_.HandleCount
+                }
+            })
+        }
+    }
+
+    # --- service.restart --------------------------------------------------
+    # For services with a known leak (e.g. one that piles up handles until the
+    # PC runs out of kernel memory). The mod passes names from its own config.
+    if ($caps -contains 'service.restart') {
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetServiceHandles -Value {
+            # Handle count of the service's process, or -1 if it isn't running.
+            param([string]$Name)
+            try {
+                $svc = Get-CimInstance Win32_Service -Filter "Name='$($Name -replace "'", "''")'" -OperationTimeoutSec 10 -ErrorAction Stop
+                if (-not $svc -or $svc.ProcessId -le 0) { return -1 }
+                return (Get-Process -Id $svc.ProcessId -ErrorAction Stop).HandleCount
+            } catch { return -1 }
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name RestartService -Value {
+            param([string]$Name)
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            try {
+                Restart-Service -Name $Name -Force -ErrorAction Stop
+                return [pscustomobject]@{ Success = $true; Error = $null; Seconds = [int]$sw.Elapsed.TotalSeconds }
+            } catch {
+                return [pscustomobject]@{ Success = $false; Error = $_.Exception.Message; Seconds = [int]$sw.Elapsed.TotalSeconds }
+            }
+        }
+    }
+
     # --- process.priority -------------------------------------------------
     if ($caps -contains 'process.priority') {
         $ctx | Add-Member -MemberType ScriptMethod -Name SetGamePriority -Value {

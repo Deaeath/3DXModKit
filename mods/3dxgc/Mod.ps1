@@ -33,6 +33,16 @@
             SessionPeakWSMB = 0.0
             RamArmed        = $true
             LastRamTrimAt   = [datetime]::MinValue
+            # leak watch
+            LastLeakCheckAt  = [datetime]::MinValue
+            HeldSamples      = New-Object System.Collections.Generic.List[psobject]
+            HeldGB           = 0.0
+            LastHeldWarnAt   = [datetime]::MinValue
+            HeldTrimNoted    = $false
+            ProcHistory      = @{}   # pid -> { Name; Samples }
+            ProcWarnedAt     = @{}   # pid -> when last reported
+            ServiceRestartAt = @{}   # service name -> when last restarted
+            OptimizersWarned = @{}
         }
 
         # ------------------------------------------------------------------
@@ -164,6 +174,144 @@
         }.GetNewClosure()
 
         # ------------------------------------------------------------------
+        # leak watch
+        # ------------------------------------------------------------------
+        # Trimming moves pages between lists; it cannot return memory that
+        # something else is leaking. The PC this was written on sat at 0.1 GB
+        # free with a driver holding every exited process (18 GB pinned) and
+        # Armoury Crate on 100k+ handles, while each trim only made the game
+        # fault its pages back in. Leak watch names those causes instead.
+
+        $checkLeaks = {
+            $lw  = $cfg.leakWatch
+            $now = Get-Date
+
+            # 1. Exited processes the kernel is still holding.
+            $held = $lw.heldProcesses
+            if ($held -and $held.enabled) {
+                $k = $ctx.GetKernelLeak()
+                if ($k.Error) {
+                    $ctx.LogDebug("leak watch: cannot read kernel counters: $($k.Error)")
+                } else {
+                    $state.HeldGB = $k.HeldGB
+                    $state.HeldSamples.Add([pscustomobject]@{ At = $now; Count = $k.HeldExited })
+                    while ($state.HeldSamples.Count -gt 13) { $state.HeldSamples.RemoveAt(0) }
+
+                    if ($k.HeldExited -ge $held.warnAbove -and
+                        ($now - $state.LastHeldWarnAt).TotalMinutes -ge $held.warnEveryMinutes) {
+                        $state.LastHeldWarnAt = $now
+                        $first = $state.HeldSamples[0]
+                        $hours = ($now - $first.At).TotalHours
+                        $rate  = if ($hours -gt 0.05) { ' growing {0:N0}/h,' -f (($k.HeldExited - $first.Count) / $hours) } else { '' }
+                        $ctx.LogWarn(("{0:N0} exited processes are still held by the kernel (~{1} GB no process owns,{2} {3:N0} running). A driver is keeping them alive - no trim or purge frees this, only Restart (not Shut down: Fast Startup keeps it)." -f `
+                            $k.HeldExited, $k.HeldGB, $rate, $k.RunningProcesses))
+
+                        if ($held.leakTest) {
+                            $n = 6
+                            $stuck = $ctx.RunLeakTest($n)
+                            if ($stuck -gt 0) {
+                                $ctx.LogWarn("leak test: $stuck of $n new processes were still held after exiting - the leak is active. Usual suspects are kernel drivers that watch every process (AMD Radeon iGPU drivers older than 32.0.21045, antivirus, VPN split tunnelling, input remappers): update the one to blame, then Restart.")
+                            } else {
+                                $ctx.Log("leak test: 0 of $n new processes held - not leaking now; the ones already held go at the next Restart.")
+                            }
+                        }
+                    }
+                }
+            }
+
+            $optimizers = @($lw.competingOptimizers | Where-Object { $_ })
+            $pw = $lw.processes
+            $sample = @()
+            if (($pw -and $pw.enabled) -or $optimizers.Count -gt 0) { $sample = $ctx.GetProcessSample() }
+
+            # 2. Processes that only ever grow.
+            if ($pw -and $pw.enabled) {
+                $ignore = @($pw.ignore)
+                $seen = @{}
+                foreach ($p in $sample) {
+                    if ($ignore -contains $p.Name) { continue }
+                    $seen[$p.Id] = $true
+
+                    $hist = $state.ProcHistory[$p.Id]
+                    if ($null -eq $hist -or $hist.Name -ne $p.Name) {
+                        $hist = [pscustomobject]@{ Name = $p.Name; Samples = New-Object System.Collections.Generic.List[psobject] }
+                        $state.ProcHistory[$p.Id] = $hist
+                    }
+                    $hist.Samples.Add([pscustomobject]@{ At = $now; Priv = $p.PrivateBytes; Handles = $p.Handles })
+                    while ($hist.Samples.Count -gt $pw.windowSamples) { $hist.Samples.RemoveAt(0) }
+                    if ($hist.Samples.Count -lt $pw.windowSamples) { continue }
+
+                    $warned = $state.ProcWarnedAt[$p.Id]
+                    if ($warned -and ($now - $warned).TotalMinutes -lt $pw.warnEveryMinutes) { continue }
+
+                    $s     = $hist.Samples
+                    $last  = $s[$s.Count - 1]
+                    $hours = ($last.At - $s[0].At).TotalHours
+                    if ($hours -le 0) { continue }
+
+                    # Rising at (nearly) every sample, not just overall: a cache
+                    # that fills and then plateaus is not a leak.
+                    $privUp = 0; $handlesUp = 0
+                    for ($i = 1; $i -lt $s.Count; $i++) {
+                        if ($s[$i].Priv -gt $s[$i - 1].Priv) { $privUp++ }
+                        if ($s[$i].Handles -gt $s[$i - 1].Handles) { $handlesUp++ }
+                    }
+                    $steps      = $s.Count - 1
+                    $privMB     = $last.Priv / 1MB
+                    $privPerHr  = ($last.Priv - $s[0].Priv) / 1MB / $hours
+                    $handlesPerHr = ($last.Handles - $s[0].Handles) / $hours
+
+                    $why = @()
+                    if ($privUp -ge $steps - 1 -and $privMB -ge $pw.minPrivateMB -and $privPerHr -ge $pw.privateMBPerHour) {
+                        $why += ('memory +{0:N0} MB/h (now {1:N0} MB)' -f $privPerHr, $privMB)
+                    }
+                    if ($handlesUp -ge $steps - 1 -and $last.Handles -ge $pw.minHandles -and $handlesPerHr -ge $pw.handlesPerHour) {
+                        $why += ('handles +{0:N0}/h (now {1:N0})' -f $handlesPerHr, $last.Handles)
+                    }
+                    if ($why.Count -gt 0) {
+                        $state.ProcWarnedAt[$p.Id] = $now
+                        $ctx.LogWarn(("leak suspect: {0} (pid {1}) {2} - restarting it gives this back" -f $p.Name, $p.Id, ($why -join ', ')))
+                    }
+                }
+                foreach ($id in @($state.ProcHistory.Keys)) {
+                    if (-not $seen.ContainsKey($id)) { $state.ProcHistory.Remove($id); $state.ProcWarnedAt.Remove($id) }
+                }
+            }
+
+            # 3. Services with a known leak: restart once past the line.
+            $rs = $lw.restartServices
+            if ($rs -and $rs.enabled) {
+                foreach ($name in @($rs.names | Where-Object { $_ })) {
+                    $handles = $ctx.GetServiceHandles($name)
+                    if ($handles -lt $rs.aboveHandles) { continue }
+                    $restarted = $state.ServiceRestartAt[$name]
+                    if ($restarted -and ($now - $restarted).TotalMinutes -lt $rs.cooldownMinutes) { continue }
+                    $state.ServiceRestartAt[$name] = $now
+
+                    if (-not $ctx.IsElevated()) {
+                        $ctx.LogWarn(("{0} is leaking ({1:N0} handles) - restarting it needs Administrator; reopen 3dxGC and accept the prompt" -f $name, $handles))
+                        continue
+                    }
+                    $r = $ctx.RestartService($name)
+                    if ($r.Success) {
+                        $ctx.Log(("restarted {0}: {1:N0} -> {2:N0} handles ({3} s)" -f $name, $handles, $ctx.GetServiceHandles($name), $r.Seconds))
+                    } else {
+                        $ctx.LogWarn("could not restart ${name}: $($r.Error)")
+                    }
+                }
+            }
+
+            # 4. Another optimiser emptying working sets alongside this one.
+            foreach ($name in $optimizers) {
+                if ($state.OptimizersWarned.ContainsKey($name)) { continue }
+                if (@($sample | Where-Object { $_.Name -eq $name }).Count -gt 0) {
+                    $state.OptimizersWarned[$name] = $true
+                    $ctx.LogWarn("$name is also emptying working sets. Two optimisers fight - each trim makes the other's pages fault back in. Close one of them.")
+                }
+            }
+        }.GetNewClosure()
+
+        # ------------------------------------------------------------------
         # event wiring
         # ------------------------------------------------------------------
 
@@ -225,10 +373,17 @@
             }.GetNewClosure())
         }
 
-        # Tick drives the debounced blur trim, the RAM-amount trigger and the
-        # periodic sweep.
+        # Tick drives leak watch, the debounced blur trim, the RAM-amount
+        # trigger and the periodic sweep.
         $ctx.On('tick', {
             param($e)
+
+            $lw = $cfg.leakWatch
+            if ($lw -and $lw.enabled -and
+                ((Get-Date) - $state.LastLeakCheckAt).TotalSeconds -ge $lw.everySeconds) {
+                $state.LastLeakCheckAt = Get-Date
+                & $checkLeaks
+            }
 
             if ($null -ne $state.BlurredAt) {
                 $elapsed = ((Get-Date) - $state.BlurredAt).TotalSeconds
@@ -270,8 +425,23 @@
                     if ($since -ge $ram.cooldownSeconds) {
                         # Only a trim that actually landed disarms; a skipped
                         # one (rate limit, focus) stays armed and retries.
+                        # Free RAM eaten by memory the kernel is holding is not
+                        # the game's to give back; trimming it while you play
+                        # would only buy stutter.
+                        $focusOk = [bool]$ram.whileFocused
+                        $held = if ($lw) { $lw.heldProcesses } else { $null }
+                        if ($focusOk -and $sysLow -and $over -notlike 'game*' -and
+                            $held -and $held.skipFocusedTrimAboveGB -gt 0 -and
+                            $state.HeldGB -ge $held.skipFocusedTrimAboveGB) {
+                            $focusOk = $false
+                            if (-not $state.HeldTrimNoted) {
+                                $state.HeldTrimNoted = $true
+                                $ctx.Log("free RAM is low because the kernel is holding ~$($state.HeldGB) GB - not trimming the game while it has focus")
+                            }
+                        }
+
                         $trimsBefore = $state.TotalTrims
-                        & $doTrim "ram: $over" ([bool]$ram.whileFocused)
+                        & $doTrim "ram: $over" $focusOk
                         if ($state.TotalTrims -gt $trimsBefore) {
                             $state.RamArmed      = $false
                             $state.LastRamTrimAt = Get-Date
@@ -292,7 +462,7 @@
             }
         }.GetNewClosure())
 
-        $ctx.Log("ready - triggers: blur=$($cfg.triggers.onBlur.enabled) minimize=$($cfg.triggers.onMinimize.enabled) idle=$($cfg.triggers.onIdle.enabled) lowmem=$($cfg.triggers.onLowMemory.enabled) ram=$(if ($cfg.triggers.onRamAmount) { $cfg.triggers.onRamAmount.enabled } else { $false })")
+        $ctx.Log("ready - triggers: blur=$($cfg.triggers.onBlur.enabled) minimize=$($cfg.triggers.onMinimize.enabled) idle=$($cfg.triggers.onIdle.enabled) lowmem=$($cfg.triggers.onLowMemory.enabled) ram=$(if ($cfg.triggers.onRamAmount) { $cfg.triggers.onRamAmount.enabled } else { $false }) leakwatch=$(if ($cfg.leakWatch) { $cfg.leakWatch.enabled } else { $false })")
         if (-not $ctx.IsElevated()) {
             $ctx.LogWarn('unelevated: per-process trimming active, system-wide purges unavailable')
         }
