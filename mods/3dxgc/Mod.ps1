@@ -46,8 +46,7 @@
             AppTrimmedAt     = @{}   # app name -> when its working set was last trimmed
             LastFrontAt      = @{}   # app name -> when it was last the window in front
             AppsTrimmedMB    = 0.0
-            AppAskedAt       = @{}   # app name -> when you were last asked about restarting it
-            ServiceAskedAt   = @{}   # service name -> likewise
+            StartedAt        = Get-Date
         }
 
         # ------------------------------------------------------------------
@@ -304,8 +303,10 @@
             #    garbage collection Windows can do from outside an app. Never an
             #    app you used in the last few minutes, the window in front, or
             #    one playing or recording sound - nothing you're using has to
-            #    page back in. whenFreeBelowPercent 100 means always.
-            if ($ta -and $ta.enabled) {
+            #    page back in. whenFreeBelowPercent 100 means always. Nothing
+            #    in the first backgroundMinutes after start: until then there is
+            #    no telling which apps you were just using.
+            if ($ta -and $ta.enabled -and ($now - $state.StartedAt).TotalMinutes -ge $ta.backgroundMinutes) {
                 $limit = if ($ta.whenFreeBelowPercent) { $ta.whenFreeBelowPercent } else { 100 }
                 if ($ctx.GetSystemMemory().AvailPercent -lt $limit) {
                     foreach ($name in @($ta.names | Where-Object { $_ })) {
@@ -335,33 +336,57 @@
                 }
             }
 
-            # 4. Apps and services that have grown past their line: ask. A
-            #    restart is the only thing that gives an app's leaked memory
+            # 4. Apps and services that have grown past their line: maybe ask.
+            #    A restart is the only thing that gives an app's leaked memory
             #    itself back, and it is always your call - this only writes the
             #    question; the control panel shows it as its prompt card and
-            #    restarts nothing unless you press Restart. Never while on a call.
-            if ($ra -and $ra.enabled) {
-                $every = if ($ra.everyMinutes) { $ra.everyMinutes } else { 240 }
-                foreach ($app in @($ra.apps | Where-Object { $_ -and $_.name })) {
-                    $name = $app.name
-                    $mb = (@($sample | Where-Object { $_.Name -eq $name }) | Measure-Object PrivateBytes -Sum).Sum / 1MB
-                    if (-not $mb -or $mb -lt $app.aboveMB) { continue }
-                    $asked = $state.AppAskedAt[$name]
-                    if ($asked -and ($now - $asked).TotalMinutes -lt $every) { continue }
-                    $act = $ctx.GetAppActivity($name)
-                    if ($act.Microphone -or $act.Camera) { continue }
-                    $state.AppAskedAt[$name] = $now
-                    $ctx.Log(("{0} has grown to {1:N0} MB - asking whether to restart it" -f $name, $mb))
+            #    restarts nothing unless you press Restart. Trimming already
+            #    takes the RAM back, so an app is only asked about when that is
+            #    not enough (RAM or commit really short), at most once a day,
+            #    never in the first half hour, never on a call, and not at all
+            #    while snoozed from the card. When it last asked and what you
+            #    snoozed live in config\, so restarting 3dxGC doesn't ask again.
+            if ($ra -and $ra.enabled -and ($now - $state.StartedAt).TotalMinutes -ge $ra.notInFirstMinutes) {
+                $sys = $ctx.GetSystemMemory()
+                $commitPct = if ($sys.TotalPageFileBytes) { 100 - 100.0 * $sys.AvailPageFileBytes / $sys.TotalPageFileBytes } else { 0 }
+                $short = ($sys.AvailPercent -lt $ra.whenFreeBelowPercent) -or ($commitPct -gt $ra.whenCommitAbovePercent)
+                $every = if ($ra.everyMinutes) { $ra.everyMinutes } else { 1440 }
+
+                $saved = $ctx.LoadState()
+                if (-not $saved) { $saved = @{} }
+                if (-not $saved.askedAt) { $saved.askedAt = @{} }
+                $snoozed = if ($saved.snoozedUntil) { $saved.snoozedUntil } else { @{} }
+                $mayAsk = {
+                    param($key)
+                    $until = $snoozed[$key]
+                    if ($until -and [datetime]$until -gt $now) { return $false }
+                    $last = $saved.askedAt[$key]
+                    return -not ($last -and ($now - [datetime]$last).TotalMinutes -lt $every)
                 }
+                $asked = $false
+
+                if ($short) {
+                    foreach ($app in @($ra.apps | Where-Object { $_ -and $_.name })) {
+                        $name = $app.name
+                        $mb = (@($sample | Where-Object { $_.Name -eq $name }) | Measure-Object PrivateBytes -Sum).Sum / 1MB
+                        if (-not $mb -or $mb -lt $app.aboveMB) { continue }
+                        if (-not (& $mayAsk $name)) { continue }
+                        $act = $ctx.GetAppActivity($name)
+                        if ($act.Microphone -or $act.Camera) { continue }
+                        $saved.askedAt[$name] = $now.ToString('o'); $asked = $true
+                        $ctx.Log(("{0} has grown to {1:N0} MB - asking whether to restart it" -f $name, $mb))
+                    }
+                }
+                # A handle leak is a leak whatever the RAM says.
                 foreach ($svc in @($ra.services | Where-Object { $_ -and $_.name })) {
                     $name = $svc.name
                     $handles = $ctx.GetServiceHandles($name)
                     if ($handles -lt $svc.aboveHandles) { continue }
-                    $asked = $state.ServiceAskedAt[$name]
-                    if ($asked -and ($now - $asked).TotalMinutes -lt $every) { continue }
-                    $state.ServiceAskedAt[$name] = $now
+                    if (-not (& $mayAsk $name)) { continue }
+                    $saved.askedAt[$name] = $now.ToString('o'); $asked = $true
                     $ctx.Log(("{0} service is leaking ({1:N0} handles) - asking whether to restart it" -f $name, $handles))
                 }
+                if ($asked) { $ctx.SaveState($saved) }
             }
 
             # 5. Another optimiser emptying working sets alongside this one.

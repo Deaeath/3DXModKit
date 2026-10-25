@@ -36,7 +36,7 @@
     "trimApps":      { "enabled": true, "whenFreeBelowPercent": 100, "everyMinutes": 10, "backgroundMinutes": 5, "minWorkingSetMB": 200,
                        "names": ["explorer", "Discord", "DiscordPTB", "DiscordCanary", "chrome", "opera", "msedge", "msedgewebview2",
                                  "Spotify", "steam", "steamwebhelper", "EpicGamesLauncher", "EpicWebHelper", "OneDrive", "Overwolf", "Code"] },
-    "askToRestart":  { "enabled": true, "everyMinutes": 240,
+    "askToRestart":  { "enabled": true, "everyMinutes": 1440, "notInFirstMinutes": 30, "whenFreeBelowPercent": 15, "whenCommitAbovePercent": 90,
                        "apps": [
                          { "name": "explorer",      "aboveMB": 1500 },
                          { "name": "Discord",       "aboveMB": 3000 },

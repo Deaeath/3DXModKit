@@ -56,6 +56,15 @@
       <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
     </Style>
+
+    <Style x:Key="Quiet" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{StaticResource TextDim}"/>
+      <Setter Property="Padding" Value="2,7"/>
+      <Setter Property="Margin" Value="0"/>
+      <Setter Property="FontSize" Value="11"/>
+    </Style>
   </Window.Resources>
 
   <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Accent}" BorderThickness="1"
@@ -72,10 +81,11 @@
       <TextBlock x:Name="TxtTitle" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,5"/>
       <TextBlock x:Name="TxtBody" FontSize="12" Foreground="{StaticResource TextDim}" TextWrapping="Wrap"
                  LineHeight="17" Margin="0,0,0,13"/>
-      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-        <Button x:Name="BtnNo" Content="Not now"/>
-        <Button x:Name="BtnYes" Content="Restart" Style="{StaticResource Primary}"/>
-      </StackPanel>
+      <DockPanel LastChildFill="False">
+        <Button x:Name="BtnNever" DockPanel.Dock="Left" Content="Don't ask again" Style="{StaticResource Quiet}"/>
+        <Button x:Name="BtnYes" DockPanel.Dock="Right" Content="Restart" Style="{StaticResource Primary}"/>
+        <Button x:Name="BtnNo" DockPanel.Dock="Right" Content="Not now"/>
+      </DockPanel>
     </StackPanel>
   </Border>
 </Window>

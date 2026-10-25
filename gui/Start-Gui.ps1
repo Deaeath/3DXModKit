@@ -314,10 +314,23 @@ function Open-NextPromptCard {
     $card.FindName('TxtBody').Text  = $p.Text
     if (-not $p.Action) {
         $card.FindName('BtnYes').Visibility = 'Collapsed'
+        $card.FindName('BtnNever').Visibility = 'Collapsed'
         $card.FindName('BtnNo').Content = 'OK'
     }
     $card.FindName('BtnYes').Add_Click({ $a = $Script:PromptCurrent.Action; Close-PromptCard; Invoke-PromptAction $a })
-    $card.FindName('BtnNo').Add_Click({ Close-PromptCard })
+    # Not now: not for three days. Don't ask again: never for this one. Both
+    # are saved where the governor looks before asking, so they survive a
+    # restart of 3dxGC. Letting the card time out snoozes nothing.
+    $card.FindName('BtnNo').Add_Click({
+        $a = $Script:PromptCurrent.Action
+        if ($a) { Set-PromptSnooze -Name $a.Name -Days 3 }
+        Close-PromptCard
+    })
+    $card.FindName('BtnNever').Add_Click({
+        $a = $Script:PromptCurrent.Action
+        if ($a) { Set-PromptSnooze -Name $a.Name -Days 3650; Add-LogLine "[Info] won't ask about restarting $(Get-FriendlyName $a.Name) again" }
+        Close-PromptCard
+    })
 
     # No-activate + tool window: clicking it never takes focus from the game,
     # and it stays out of Alt+Tab.
@@ -357,6 +370,32 @@ function Close-PromptCard {
     }
 }
 
+function Set-PromptSnooze {
+    param([string]$Name, [double]$Days)
+    $path = Join-Path $ModKitRoot 'config\3dxgc.state.json'
+    $s = $null
+    try { if (Test-Path -LiteralPath $path) { $s = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } } catch { }
+    if (-not $s) { $s = [pscustomobject]@{} }
+    if (-not $s.PSObject.Properties['snoozedUntil']) {
+        $s | Add-Member -NotePropertyName snoozedUntil -NotePropertyValue ([pscustomobject]@{})
+    }
+    $until = (Get-Date).AddDays($Days).ToString('o')
+    if ($s.snoozedUntil.PSObject.Properties[$Name]) { $s.snoozedUntil.$Name = $until }
+    else { $s.snoozedUntil | Add-Member -NotePropertyName $Name -NotePropertyValue $until }
+    try { $s | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding UTF8 }
+    catch { Add-LogLine "[Warn] could not save the snooze for ${Name}: $($_.Exception.Message)" }
+}
+
+$Script:FriendlyNames = @{
+    explorer = 'File Explorer'; Discord = 'Discord'; DiscordPTB = 'Discord PTB'; DiscordCanary = 'Discord Canary'
+    ArmouryCrateService = 'Armoury Crate'; chrome = 'Chrome'; opera = 'Opera'; msedge = 'Edge'; Code = 'VS Code'
+}
+function Get-FriendlyName {
+    param([string]$Name)
+    if ($Script:FriendlyNames.ContainsKey($Name)) { return $Script:FriendlyNames[$Name] }
+    return $Name
+}
+
 function Invoke-PromptAction {
     param([hashtable]$Action)
     if (-not $Action) { return }
@@ -372,14 +411,15 @@ function Invoke-PromptAction {
 function Show-AppRestartNotice {
     param([string]$Line)
     if ($Line -match '\[3dxgc\] (\S+) has grown to (.+? MB) - asking whether to restart it') {
-        $app = $matches[1]; $size = $matches[2]
-        Show-PromptCard "Restart $app?" `
-            "$app has grown to $size of memory. Restarting it gives that back. Not now leaves it running - you'll be asked again in a few hours if it's still this big." `
+        $app = $matches[1]; $size = $matches[2]; $nice = Get-FriendlyName $app
+        $extra = if ($app -ieq 'explorer') { ' Your taskbar blinks and open folders come back.' } else { '' }
+        Show-PromptCard "Restart $nice?" `
+            "$nice has grown to $size and your PC is short on memory. Restarting it gives that back.$extra Not now: ask again in 3 days." `
             @{ Kind = 'restart-app'; Name = $app; Size = $size }
     } elseif ($Line -match '\[3dxgc\] (\S+) service is leaking \((.+?) handles\) - asking whether to restart it') {
-        $svc = $matches[1]; $handles = $matches[2]
-        Show-PromptCard "Restart $svc?" `
-            "This service is leaking - it holds $handles handles. Restarting it fixes that (Windows will ask for administrator). Not now leaves it running." `
+        $svc = $matches[1]; $handles = $matches[2]; $nice = Get-FriendlyName $svc
+        Show-PromptCard "Restart $nice?" `
+            "$nice's background service is leaking - it holds $handles handles. Restarting it fixes that (Windows asks for administrator). Not now: ask again in 3 days." `
             @{ Kind = 'restart-service'; Name = $svc; Size = "$handles handles" }
     }
 }
@@ -410,14 +450,14 @@ function Receive-AppRestart {
 
     if ($r -and $r.Success) {
         Add-LogLine "[Info] restarted $name"
-        Show-PromptCard "Restarted $name" "It had grown to $($State.AppRestartSize). It's back and starting fresh." -Seconds 8
+        Show-PromptCard "Restarted $(Get-FriendlyName $name)" "It had grown to $($State.AppRestartSize). It's back and starting fresh." -Seconds 8
     } elseif ($r -and $r.Closed) {
         Add-LogLine "[Warn] closed $name but could not reopen it: $($r.Error)"
-        Show-PromptCard "$name closed but didn't reopen" "Reopening it failed ($($r.Error)). Open it again yourself." -Seconds 60
+        Show-PromptCard "$(Get-FriendlyName $name) closed but didn't reopen" "Reopening it failed ($($r.Error)). Open it again yourself." -Seconds 60
     } else {
         $err = if ($r) { $r.Error } else { 'no result' }
         Add-LogLine "[Warn] could not restart ${name}: $err"
-        Show-PromptCard "Couldn't restart $name" "$err - nothing was closed." -Seconds 20
+        Show-PromptCard "Couldn't restart $(Get-FriendlyName $name)" "$err - nothing was closed." -Seconds 20
     }
 }
 
