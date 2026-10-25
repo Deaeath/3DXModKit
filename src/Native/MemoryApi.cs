@@ -11,8 +11,10 @@
 // Empty Standby List          -> PurgeStandbyList()         cmd 4
 // Empty Priority 0 Standby    -> PurgeLowPriorityStandby()  cmd 5
 //
-// GetKernelLeak() and RunLeakTest() find what no Empty operation can return:
-// exited processes a driver is still holding, each pinning page tables and pool.
+// GetKernelLeak() and StartLeakTest()/CountHeld() find what no Empty operation
+// can return: exited processes a driver is still holding, each pinning page
+// tables and pool. AudioActivity says which processes are playing or recording
+// sound, so an app is never restarted in the middle of a call or a song.
 //
 // TrimProcess() is the targeted primitive and the only one that needs no
 // elevation - you may always trim the working set of a process you own. Every
@@ -431,12 +433,11 @@ namespace ThreeDX.ModKit.Native
         }
 
         /// <summary>
-        /// Starts <paramref name="count"/> short whoami.exe processes, closes every
-        /// handle to them, and returns how many the system still holds after they
-        /// exit. 0 is healthy; all of them means a driver is keeping every exited
-        /// process - and its memory - alive.
+        /// First half of the leak test: starts <paramref name="count"/> short
+        /// whoami.exe processes, waits for each to exit, closes every handle to
+        /// them, and returns their ids for <see cref="CountHeld"/>.
         /// </summary>
-        public static int RunLeakTest(int count)
+        public static int[] StartLeakTest(int count)
         {
             var pids = new List<int>();
             string exe = Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\whoami.exe");
@@ -453,10 +454,17 @@ namespace ThreeDX.ModKit.Native
                     pids.Add(p.Id);
                 }
             }
+            return pids.ToArray();
+        }
 
-            // Give antivirus and other watchers time to drop their own short-lived handles.
-            System.Threading.Thread.Sleep(2500);
-
+        /// <summary>
+        /// Second half: how many of those exited processes the system still holds.
+        /// Check minutes later, not seconds - some watchers hold every new process
+        /// for a minute or two and then let go, which is not a leak. Still held
+        /// after five minutes means a driver is keeping them, and their memory, alive.
+        /// </summary>
+        public static int CountHeld(int[] pids)
+        {
             int held = 0;
             foreach (int pid in pids)
             {
@@ -650,4 +658,124 @@ namespace ThreeDX.ModKit.Native
 
         #endregion
     }
+
+    #region Audio activity (Core Audio session API)
+
+    [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+    internal class MMDeviceEnumeratorComObject { }
+
+    [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IMMDeviceEnumerator
+    {
+        [PreserveSig] int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
+        // remaining methods unused
+    }
+
+    [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IMMDeviceCollection
+    {
+        [PreserveSig] int GetCount(out int count);
+        [PreserveSig] int Item(int index, out IMMDevice device);
+    }
+
+    [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IMMDevice
+    {
+        [PreserveSig] int Activate(ref Guid iid, int clsCtx, IntPtr activationParams,
+                                   [MarshalAs(UnmanagedType.IUnknown)] out object iface);
+        // remaining methods unused
+    }
+
+    [ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IAudioSessionManager2
+    {
+        [PreserveSig] int GetAudioSessionControl(IntPtr groupingParam, int flags, out IntPtr control);
+        [PreserveSig] int GetSimpleAudioVolume(IntPtr groupingParam, int flags, out IntPtr volume);
+        [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator sessions);
+        // remaining methods unused
+    }
+
+    [ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IAudioSessionEnumerator
+    {
+        [PreserveSig] int GetCount(out int count);
+        [PreserveSig] int GetSession(int index, out IAudioSessionControl2 session);
+    }
+
+    // Vtable order matters: the nine IAudioSessionControl methods come first.
+    [ComImport, Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IAudioSessionControl2
+    {
+        [PreserveSig] int GetState(out int state);
+        [PreserveSig] int GetDisplayName(out IntPtr name);
+        [PreserveSig] int SetDisplayName(IntPtr name, IntPtr eventContext);
+        [PreserveSig] int GetIconPath(out IntPtr path);
+        [PreserveSig] int SetIconPath(IntPtr path, IntPtr eventContext);
+        [PreserveSig] int GetGroupingParam(out Guid groupingParam);
+        [PreserveSig] int SetGroupingParam(ref Guid groupingParam, IntPtr eventContext);
+        [PreserveSig] int RegisterAudioSessionNotification(IntPtr client);
+        [PreserveSig] int UnregisterAudioSessionNotification(IntPtr client);
+        [PreserveSig] int GetSessionIdentifier(out IntPtr id);
+        [PreserveSig] int GetSessionInstanceIdentifier(out IntPtr id);
+        [PreserveSig] int GetProcessId(out uint pid);
+    }
+
+    /// <summary>
+    /// Which processes are playing or recording sound right now - a call, a
+    /// song, a stream. Covers every active output and input device. An app on
+    /// this list is in use even when nobody is touching the keyboard.
+    /// </summary>
+    public static class AudioActivity
+    {
+        private const int eAll = 2;
+        private const int DEVICE_STATE_ACTIVE = 1;
+        private const int CLSCTX_ALL = 0x17;
+        private const int AudioSessionStateActive = 1;
+
+        public static int[] GetActiveProcessIds()
+        {
+            var pids = new HashSet<int>();
+            Guid managerIid = typeof(IAudioSessionManager2).GUID;
+            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+            try
+            {
+                IMMDeviceCollection devices;
+                if (enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE, out devices) != 0) return new int[0];
+                int deviceCount;
+                devices.GetCount(out deviceCount);
+                for (int d = 0; d < deviceCount; d++)
+                {
+                    IMMDevice device;
+                    if (devices.Item(d, out device) != 0) continue;
+                    object o;
+                    if (device.Activate(ref managerIid, CLSCTX_ALL, IntPtr.Zero, out o) != 0) continue;
+                    var manager = (IAudioSessionManager2)o;
+                    IAudioSessionEnumerator sessions;
+                    if (manager.GetSessionEnumerator(out sessions) != 0) continue;
+                    int sessionCount;
+                    sessions.GetCount(out sessionCount);
+                    for (int s = 0; s < sessionCount; s++)
+                    {
+                        IAudioSessionControl2 session;
+                        if (sessions.GetSession(s, out session) != 0) continue;
+                        int state; uint pid;
+                        if (session.GetState(out state) == 0 && state == AudioSessionStateActive &&
+                            session.GetProcessId(out pid) == 0 && pid != 0)
+                            pids.Add((int)pid);
+                        Marshal.ReleaseComObject(session);
+                    }
+                    Marshal.ReleaseComObject(sessions);
+                    Marshal.ReleaseComObject(manager);
+                    Marshal.ReleaseComObject(device);
+                }
+                Marshal.ReleaseComObject(devices);
+            }
+            finally { Marshal.ReleaseComObject(enumerator); }
+            var result = new int[pids.Count];
+            pids.CopyTo(result);
+            return result;
+        }
+    }
+
+    #endregion
 }

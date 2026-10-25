@@ -26,6 +26,9 @@
       },
       "safety": {
         "neverTrimWhenForeground": false
+      },
+      "leakWatch": {
+        "trimApps": { "everyMinutes": 5, "backgroundMinutes": 2, "minWorkingSetMB": 100 }
       }
     }
   }

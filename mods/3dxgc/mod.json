@@ -1,8 +1,8 @@
 {
   "id": "3dxgc",
   "name": "3dxGC",
-  "version": "1.2.0",
-  "description": "Adaptive working-set governor for 3DXChat. Trims the game's resident footprint when it is backgrounded, minimised, or idle, or when its RAM use (or the PC's free RAM) crosses a set amount, and escalates to system-wide standby purges only under genuine memory pressure. Only the RAM-amount trigger may trim while the game holds focus, and it can be told not to. Leak watch reports memory no trim can return - exited processes a driver is still holding, apps and services that only grow - and restarts listed leaky services.",
+  "version": "1.3.0",
+  "description": "Adaptive working-set governor for 3DXChat. Trims the game's resident footprint when it is backgrounded, minimised, or idle, or when its RAM use (or the PC's free RAM) crosses a set amount, and escalates to system-wide standby purges only under genuine memory pressure. Only the RAM-amount trigger may trim while the game holds focus, and it can be told not to. Leak watch reports memory no trim can return - exited processes a driver is still holding, apps and services that only grow - takes RAM back from leaky background apps by trimming them (never closing anything), and asks before any restart: it never restarts an app, a service or Windows by itself.",
   "author": "3DXModKit",
   "tier": "host",
   "entry": "Mod.ps1",
@@ -13,7 +13,6 @@
     "memory.trim.self",
     "memory.trim.system",
     "memory.diagnose",
-    "service.restart",
     "fs.write.config",
     "ui.console"
   ],

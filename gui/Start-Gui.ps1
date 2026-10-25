@@ -122,6 +122,9 @@ $State = [pscustomobject]@{
     UpdateDownloadJob = $null
     LastUpdateCheckAt = [datetime]::MinValue
     UpdateApplying    = $false
+    AppRestartJob     = $null
+    AppRestartName    = $null
+    AppRestartSize    = $null
 }
 
 function Set-Status {
@@ -259,6 +262,165 @@ function Update-Graph {
 # Telemetry
 # ---------------------------------------------------------------------------
 
+# Small tray notifications ("trimmed", "still running in the tray"). Windows
+# may hold these back (Do Not Disturb, games, full screen), so nothing that
+# needs an answer goes through here - questions use the prompt card below.
+function Show-Notice {
+    param([int]$Milliseconds, [string]$Title, [string]$Text, [string]$Icon = 'Info')
+    $tray = Get-Variable -Name tray -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($tray) { $tray.ShowBalloonTip($Milliseconds, $Title, $Text, $Icon) }
+}
+
+# ---------------------------------------------------------------------------
+# Prompt card
+#
+# 3dxGC's own question window, because Windows' notifications can't be
+# trusted to show one: Do Not Disturb, game mode and full-screen apps send
+# them silently to the notification centre. The card sits in the corner on
+# top of everything but never takes focus - the game keeps the keyboard and
+# mouse - has real buttons, and closes itself as "Not now" after a minute.
+# One at a time; the rest wait their turn.
+# ---------------------------------------------------------------------------
+
+if (-not ('ThreeDX.ModKit.Gui.NoActivate' -as [type])) {
+    Add-Type -Namespace ThreeDX.ModKit.Gui -Name NoActivate -MemberDefinition @'
+[DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int index);
+[DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr hWnd, int index, int value);
+'@
+}
+
+$Script:GuiRoot     = $PSScriptRoot
+$Script:PromptQueue = New-Object System.Collections.Generic.Queue[hashtable]
+$Script:PromptCard  = $null
+$Script:PromptTimer = $null
+$Script:PromptCurrent = $null
+
+# Queue a card. -Action (data) is what "Restart" does; without one the card
+# just informs and has a single OK button.
+function Show-PromptCard {
+    param([string]$Title, [string]$Text, [hashtable]$Action = $null, [int]$Seconds = 60)
+    $Script:PromptQueue.Enqueue(@{ Title = $Title; Text = $Text; Action = $Action; Seconds = $Seconds })
+    if (-not $Script:PromptCard) { Open-NextPromptCard }
+}
+
+function Open-NextPromptCard {
+    if ($Script:PromptCard -or $Script:PromptQueue.Count -eq 0) { return }
+    $p = $Script:PromptQueue.Dequeue()
+    $Script:PromptCurrent = $p
+
+    [xml]$x = Get-Content -LiteralPath (Join-Path $Script:GuiRoot 'PromptCard.xaml') -Raw
+    $card = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+    $card.FindName('TxtTitle').Text = $p.Title
+    $card.FindName('TxtBody').Text  = $p.Text
+    if (-not $p.Action) {
+        $card.FindName('BtnYes').Visibility = 'Collapsed'
+        $card.FindName('BtnNo').Content = 'OK'
+    }
+    $card.FindName('BtnYes').Add_Click({ $a = $Script:PromptCurrent.Action; Close-PromptCard; Invoke-PromptAction $a })
+    $card.FindName('BtnNo').Add_Click({ Close-PromptCard })
+
+    # No-activate + tool window: clicking it never takes focus from the game,
+    # and it stays out of Alt+Tab.
+    $card.Add_SourceInitialized({
+        $h = (New-Object System.Windows.Interop.WindowInteropHelper($Script:PromptCard)).Handle
+        $ex = [ThreeDX.ModKit.Gui.NoActivate]::GetWindowLong($h, -20)
+        [void][ThreeDX.ModKit.Gui.NoActivate]::SetWindowLong($h, -20, ($ex -bor 0x08000000 -bor 0x80))
+    })
+    # Bottom-right of the work area, once its height is known.
+    $card.Add_SizeChanged({
+        $wa = [System.Windows.SystemParameters]::WorkArea
+        $Script:PromptCard.Left = $wa.Right - $Script:PromptCard.ActualWidth - 6
+        $Script:PromptCard.Top  = $wa.Bottom - $Script:PromptCard.ActualHeight - 6
+    })
+
+    $Script:PromptCard = $card
+    $Script:PromptCurrent.Remaining = $p.Seconds
+    $card.FindName('TxtCountdown').Text = "closes in $($p.Seconds)s"
+    $Script:PromptTimer = New-Object Windows.Threading.DispatcherTimer
+    $Script:PromptTimer.Interval = [TimeSpan]::FromSeconds(1)
+    $Script:PromptTimer.Add_Tick({
+        $Script:PromptCurrent.Remaining--
+        if ($Script:PromptCurrent.Remaining -le 0) { Close-PromptCard; return }
+        $Script:PromptCard.FindName('TxtCountdown').Text = "closes in $($Script:PromptCurrent.Remaining)s"
+    })
+    $Script:PromptTimer.Start()
+    $card.Show()
+}
+
+function Close-PromptCard {
+    if ($Script:PromptTimer) { $Script:PromptTimer.Stop(); $Script:PromptTimer = $null }
+    if ($Script:PromptCard)  { $Script:PromptCard.Close(); $Script:PromptCard = $null }
+    $Script:PromptCurrent = $null
+    # Next one after this click has finished, not inside it.
+    if ($Script:PromptQueue.Count -gt 0) {
+        [void][System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke([Action]{ Open-NextPromptCard })
+    }
+}
+
+function Invoke-PromptAction {
+    param([hashtable]$Action)
+    if (-not $Action) { return }
+    switch ($Action.Kind) {
+        'restart-app'     { Start-AppRestart -Name $Action.Name -Size $Action.Size }
+        'restart-service' { Start-AppRestart -Name $Action.Name -Size $Action.Size -Service }
+    }
+}
+
+# The governor asks about restarts through its log; this turns those lines
+# into prompt cards. Nothing restarts unless you press Restart - 3dxGC never
+# restarts an app, a service or Windows by itself.
+function Show-AppRestartNotice {
+    param([string]$Line)
+    if ($Line -match '\[3dxgc\] (\S+) has grown to (.+? MB) - asking whether to restart it') {
+        $app = $matches[1]; $size = $matches[2]
+        Show-PromptCard "Restart $app?" `
+            "$app has grown to $size of memory. Restarting it gives that back. Not now leaves it running - you'll be asked again in a few hours if it's still this big." `
+            @{ Kind = 'restart-app'; Name = $app; Size = $size }
+    } elseif ($Line -match '\[3dxgc\] (\S+) service is leaking \((.+?) handles\) - asking whether to restart it') {
+        $svc = $matches[1]; $handles = $matches[2]
+        Show-PromptCard "Restart $svc?" `
+            "This service is leaking - it holds $handles handles. Restarting it fixes that (Windows will ask for administrator). Not now leaves it running." `
+            @{ Kind = 'restart-service'; Name = $svc; Size = "$handles handles" }
+    }
+}
+
+# A pressed Restart. Runs as a job - closing an app and waiting for it to
+# come back takes seconds and must not freeze the window.
+function Start-AppRestart {
+    param([string]$Name, [string]$Size, [switch]$Service)
+    if ($State.AppRestartJob) { return }
+    $State.AppRestartName = $Name
+    $State.AppRestartSize = $Size
+    $State.AppRestartJob = Start-Job -ScriptBlock {
+        param($ModulePath, $Target, $IsService)
+        Import-Module $ModulePath -Force
+        if ($IsService) { Restart-ModKitService -Name $Target } else { Restart-ModKitApp -Name $Target }
+    } -ArgumentList (Join-Path $ModKitRoot '3DXModKit.psm1'), $Name, ([bool]$Service)
+    Add-LogLine "[Info] restarting $Name (you pressed Restart)"
+}
+
+function Receive-AppRestart {
+    if (-not $State.AppRestartJob) { return }
+    if ($State.AppRestartJob.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+    $r = $null
+    try { $r = Receive-Job -Job $State.AppRestartJob -ErrorAction SilentlyContinue | Select-Object -Last 1 } catch { }
+    Remove-Job -Job $State.AppRestartJob -Force -ErrorAction SilentlyContinue
+    $State.AppRestartJob = $null
+    $name = $State.AppRestartName
+
+    if ($r -and $r.Success) {
+        Add-LogLine "[Info] restarted $name"
+        Show-PromptCard "Restarted $name" "It had grown to $($State.AppRestartSize). It's back and starting fresh." -Seconds 8
+    } elseif ($r -and $r.Closed) {
+        Add-LogLine "[Warn] closed $name but could not reopen it: $($r.Error)"
+        Show-PromptCard "$name closed but didn't reopen" "Reopening it failed ($($r.Error)). Open it again yourself." -Seconds 60
+    } else {
+        $err = if ($r) { $r.Error } else { 'no result' }
+        Add-LogLine "[Warn] could not restart ${name}: $err"
+        Show-PromptCard "Couldn't restart $name" "$err - nothing was closed." -Seconds 20
+    }
+}
+
 function Read-GovernorLog {
     if (-not $State.LogPath) { return }
     if (-not (Test-Path -LiteralPath $State.LogPath)) { return }
@@ -268,7 +430,11 @@ function Read-GovernorLog {
             if ($fs.Length -lt $State.LogPosition) { $State.LogPosition = 0 }
             [void]$fs.Seek($State.LogPosition, 'Begin')
             $sr = New-Object IO.StreamReader($fs)
-            while (-not $sr.EndOfStream) { Add-LogLine $sr.ReadLine() }
+            while (-not $sr.EndOfStream) {
+                $line = $sr.ReadLine()
+                Add-LogLine $line
+                Show-AppRestartNotice $line
+            }
             $State.LogPosition = $fs.Position
         } finally { $fs.Dispose() }
     } catch { }
@@ -349,6 +515,7 @@ function Update-Telemetry {
     }
     Receive-UpdateCheck
     Receive-UpdateDownload
+    Receive-AppRestart
 }
 
 # ---------------------------------------------------------------------------
@@ -856,7 +1023,7 @@ $miTrim.Add_Click({
     $r = $M::TrimProcessesByName('3DXChat')
     $msg = 'Game not running'
     if ($r.Success -and $r.AffectedProcesses -gt 0) { $msg = "Trimmed - $($r.FreedMB) MB freed" }
-    $tray.ShowBalloonTip(2500, '3dxGC', $msg, 'Info')
+    Show-Notice 2500 '3dxGC' $msg
 })
 
 $miEmpty = $menu.Items.Add('Empty all (needs admin)')
@@ -869,7 +1036,7 @@ $miEmpty.Add_Click({
         $total = ($results | Measure-Object -Property BytesFreed -Sum).Sum / 1MB
         $msg = "Freed $([math]::Round($total,0)) MB"
     }
-    $tray.ShowBalloonTip(3000, '3dxGC', $msg, 'Info')
+    Show-Notice 3000 '3dxGC' $msg
 })
 
 [void]$menu.Items.Add('-')
@@ -883,7 +1050,7 @@ $tray.Add_MouseDoubleClick({ $win.Show(); $win.WindowState = 'Normal'; $win.Acti
 function Hide-ToTray {
     try {
         $win.Hide()
-        $tray.ShowBalloonTip(1500, '3dxGC', 'Still running in the tray - right-click the icon for options.', 'Info')
+        Show-Notice 1500 '3dxGC' 'Still running in the tray - right-click the icon for options.'
     } catch { }
 }
 
@@ -959,7 +1126,7 @@ if ($Minimized) { $win.WindowState = 'Minimized' }
 
 if ($JustUpdated) {
     Add-LogLine "[Info] updated to v$JustUpdated"
-    $tray.ShowBalloonTip(3000, '3dxGC', "Updated to v$JustUpdated - still running in the background.", 'Info')
+    Show-Notice 3000 '3dxGC' "Updated to v$JustUpdated - still running in the background."
 }
 
 [Windows.Threading.Dispatcher]::Run()

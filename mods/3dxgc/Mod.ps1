@@ -41,8 +41,13 @@
             HeldTrimNoted    = $false
             ProcHistory      = @{}   # pid -> { Name; Samples }
             ProcWarnedAt     = @{}   # pid -> when last reported
-            ServiceRestartAt = @{}   # service name -> when last restarted
             OptimizersWarned = @{}
+            PendingLeakTest  = $null # { At; Pids } judged on a later check
+            AppTrimmedAt     = @{}   # app name -> when its working set was last trimmed
+            LastFrontAt      = @{}   # app name -> when it was last the window in front
+            AppsTrimmedMB    = 0.0
+            AppAskedAt       = @{}   # app name -> when you were last asked about restarting it
+            ServiceAskedAt   = @{}   # service name -> likewise
         }
 
         # ------------------------------------------------------------------
@@ -197,23 +202,34 @@
                     $state.HeldSamples.Add([pscustomobject]@{ At = $now; Count = $k.HeldExited })
                     while ($state.HeldSamples.Count -gt 13) { $state.HeldSamples.RemoveAt(0) }
 
+                    $test = $state.PendingLeakTest
+                    $testMinutes = if ($held.leakTestMinutes) { $held.leakTestMinutes } else { 4 }
+                    if ($test -and ($now - $test.At).TotalMinutes -ge $testMinutes) {
+                        $state.PendingLeakTest = $null
+                        $n = $test.Pids.Count
+                        $stuck = $ctx.CountHeld($test.Pids)
+                        if ($stuck -gt 0) {
+                            $ctx.LogWarn(("leak test: {0} of {1} test processes are still held {2:N0} minutes after exiting - the leak is active. Usual suspects are kernel drivers that watch every process (AMD Radeon iGPU drivers older than 32.0.21045, antivirus, VPN split tunnelling, input remappers): updating the one to blame stops it." -f `
+                                $stuck, $n, ($now - $test.At).TotalMinutes))
+                        } else {
+                            $ctx.Log("leak test: all $n test processes were let go - not leaking now. The ones already held stay until Windows next restarts, whenever that is.")
+                        }
+                    }
+
                     if ($k.HeldExited -ge $held.warnAbove -and
                         ($now - $state.LastHeldWarnAt).TotalMinutes -ge $held.warnEveryMinutes) {
                         $state.LastHeldWarnAt = $now
                         $first = $state.HeldSamples[0]
                         $hours = ($now - $first.At).TotalHours
                         $rate  = if ($hours -gt 0.05) { ' growing {0:N0}/h,' -f (($k.HeldExited - $first.Count) / $hours) } else { '' }
-                        $ctx.LogWarn(("{0:N0} exited processes are still held by the kernel (~{1} GB no process owns,{2} {3:N0} running). A driver is keeping them alive - no trim or purge frees this, only Restart (not Shut down: Fast Startup keeps it)." -f `
+                        $ctx.LogWarn(("{0:N0} exited processes are still held by the kernel (~{1} GB no process owns,{2} {3:N0} running). A driver is keeping them alive - no trim or purge frees this; updating that driver stops it growing." -f `
                             $k.HeldExited, $k.HeldGB, $rate, $k.RunningProcesses))
 
-                        if ($held.leakTest) {
-                            $n = 6
-                            $stuck = $ctx.RunLeakTest($n)
-                            if ($stuck -gt 0) {
-                                $ctx.LogWarn("leak test: $stuck of $n new processes were still held after exiting - the leak is active. Usual suspects are kernel drivers that watch every process (AMD Radeon iGPU drivers older than 32.0.21045, antivirus, VPN split tunnelling, input remappers): update the one to blame, then Restart.")
-                            } else {
-                                $ctx.Log("leak test: 0 of $n new processes held - not leaking now; the ones already held go at the next Restart.")
-                            }
+                        # Started now, judged on a later check: some watchers
+                        # hold every new process for a minute or two and then
+                        # let go, which is not a leak.
+                        if ($held.leakTest -and $null -eq $state.PendingLeakTest) {
+                            $state.PendingLeakTest = [pscustomobject]@{ At = $now; Pids = $ctx.StartLeakTest(6) }
                         }
                     }
                 }
@@ -221,8 +237,12 @@
 
             $optimizers = @($lw.competingOptimizers | Where-Object { $_ })
             $pw = $lw.processes
+            $ta = $lw.trimApps
+            $ra = $lw.askToRestart
             $sample = @()
-            if (($pw -and $pw.enabled) -or $optimizers.Count -gt 0) { $sample = $ctx.GetProcessSample() }
+            if (($pw -and $pw.enabled) -or $optimizers.Count -gt 0 -or ($ta -and $ta.enabled) -or ($ra -and $ra.enabled)) {
+                $sample = $ctx.GetProcessSample()
+            }
 
             # 2. Processes that only ever grow.
             if ($pw -and $pw.enabled) {
@@ -270,7 +290,7 @@
                     }
                     if ($why.Count -gt 0) {
                         $state.ProcWarnedAt[$p.Id] = $now
-                        $ctx.LogWarn(("leak suspect: {0} (pid {1}) {2} - restarting it gives this back" -f $p.Name, $p.Id, ($why -join ', ')))
+                        $ctx.LogWarn(("leak suspect: {0} (pid {1}) {2}" -f $p.Name, $p.Id, ($why -join ', ')))
                     }
                 }
                 foreach ($id in @($state.ProcHistory.Keys)) {
@@ -278,30 +298,73 @@
                 }
             }
 
-            # 3. Services with a known leak: restart once past the line.
-            $rs = $lw.restartServices
-            if ($rs -and $rs.enabled) {
-                foreach ($name in @($rs.names | Where-Object { $_ })) {
-                    $handles = $ctx.GetServiceHandles($name)
-                    if ($handles -lt $rs.aboveHandles) { continue }
-                    $restarted = $state.ServiceRestartAt[$name]
-                    if ($restarted -and ($now - $restarted).TotalMinutes -lt $rs.cooldownMinutes) { continue }
-                    $state.ServiceRestartAt[$name] = $now
+            # 3. Take RAM back from background apps - actively, no restart.
+            #    Leaked and idle memory is never touched again, so once it is
+            #    trimmed out to the page file it stays out: the nearest thing to
+            #    garbage collection Windows can do from outside an app. Never an
+            #    app you used in the last few minutes, the window in front, or
+            #    one playing or recording sound - nothing you're using has to
+            #    page back in. whenFreeBelowPercent 100 means always.
+            if ($ta -and $ta.enabled) {
+                $limit = if ($ta.whenFreeBelowPercent) { $ta.whenFreeBelowPercent } else { 100 }
+                if ($ctx.GetSystemMemory().AvailPercent -lt $limit) {
+                    foreach ($name in @($ta.names | Where-Object { $_ })) {
+                        $procs = @($sample | Where-Object { $_.Name -eq $name })
+                        if ($procs.Count -eq 0) { continue }
+                        $wsMB = ($procs | Measure-Object WorkingSet -Sum).Sum / 1MB
+                        if ($wsMB -lt $ta.minWorkingSetMB) { continue }
+                        $trimmed = $state.AppTrimmedAt[$name]
+                        if ($trimmed -and ($now - $trimmed).TotalMinutes -lt $ta.everyMinutes) { continue }
+                        $front = $state.LastFrontAt[$name]
+                        if ($front -and ($now - $front).TotalMinutes -lt $ta.backgroundMinutes) { continue }
+                        $act = $ctx.GetAppActivity($name)
+                        if ($act.Foreground -or $act.Sound -or $act.Microphone -or $act.Camera) { continue }
 
-                    if (-not $ctx.IsElevated()) {
-                        $ctx.LogWarn(("{0} is leaking ({1:N0} handles) - restarting it needs Administrator; reopen 3dxGC and accept the prompt" -f $name, $handles))
-                        continue
-                    }
-                    $r = $ctx.RestartService($name)
-                    if ($r.Success) {
-                        $ctx.Log(("restarted {0}: {1:N0} -> {2:N0} handles ({3} s)" -f $name, $handles, $ctx.GetServiceHandles($name), $r.Seconds))
-                    } else {
-                        $ctx.LogWarn("could not restart ${name}: $($r.Error)")
+                        $state.AppTrimmedAt[$name] = $now
+                        $after = 0
+                        foreach ($p in $procs) {
+                            [void]$ctx.TrimProcess($p.Id)
+                            $m = $ctx.GetProcessMemory($p.Id)
+                            $after += if ($m) { $m.WorkingSetBytes } else { $p.WorkingSet }
+                        }
+                        $freedMB = [math]::Max(0, $wsMB - $after / 1MB)
+                        $state.AppsTrimmedMB += $freedMB
+                        $msg = "trimmed {0} in the background: {1:N0} MB -> {2:N0} MB of RAM, nothing closed" -f $name, $wsMB, ($after / 1MB)
+                        if ($freedMB -ge 128) { $ctx.Log($msg) } else { $ctx.LogDebug($msg) }
                     }
                 }
             }
 
-            # 4. Another optimiser emptying working sets alongside this one.
+            # 4. Apps and services that have grown past their line: ask. A
+            #    restart is the only thing that gives an app's leaked memory
+            #    itself back, and it is always your call - this only writes the
+            #    question; the control panel shows it as its prompt card and
+            #    restarts nothing unless you press Restart. Never while on a call.
+            if ($ra -and $ra.enabled) {
+                $every = if ($ra.everyMinutes) { $ra.everyMinutes } else { 240 }
+                foreach ($app in @($ra.apps | Where-Object { $_ -and $_.name })) {
+                    $name = $app.name
+                    $mb = (@($sample | Where-Object { $_.Name -eq $name }) | Measure-Object PrivateBytes -Sum).Sum / 1MB
+                    if (-not $mb -or $mb -lt $app.aboveMB) { continue }
+                    $asked = $state.AppAskedAt[$name]
+                    if ($asked -and ($now - $asked).TotalMinutes -lt $every) { continue }
+                    $act = $ctx.GetAppActivity($name)
+                    if ($act.Microphone -or $act.Camera) { continue }
+                    $state.AppAskedAt[$name] = $now
+                    $ctx.Log(("{0} has grown to {1:N0} MB - asking whether to restart it" -f $name, $mb))
+                }
+                foreach ($svc in @($ra.services | Where-Object { $_ -and $_.name })) {
+                    $name = $svc.name
+                    $handles = $ctx.GetServiceHandles($name)
+                    if ($handles -lt $svc.aboveHandles) { continue }
+                    $asked = $state.ServiceAskedAt[$name]
+                    if ($asked -and ($now - $asked).TotalMinutes -lt $every) { continue }
+                    $state.ServiceAskedAt[$name] = $now
+                    $ctx.Log(("{0} service is leaking ({1:N0} handles) - asking whether to restart it" -f $name, $handles))
+                }
+            }
+
+            # 5. Another optimiser emptying working sets alongside this one.
             foreach ($name in $optimizers) {
                 if ($state.OptimizersWarned.ContainsKey($name)) { continue }
                 if (@($sample | Where-Object { $_.Name -eq $name }).Count -gt 0) {
@@ -325,9 +388,9 @@
 
         $ctx.On('game.stopped', {
             param($e)
-            $ctx.Log(("session totals: {0} trims, {1} purges, {2} MB reclaimed, peak WS {3} MB" -f `
+            $ctx.Log(("session totals: {0} trims, {1} purges, {2} MB reclaimed, peak WS {3} MB, {4:N0} MB taken back from background apps" -f `
                 $state.TotalTrims, $state.TotalPurges,
-                [math]::Round($state.TotalFreedMB,1), $state.SessionPeakWSMB))
+                [math]::Round($state.TotalFreedMB,1), $state.SessionPeakWSMB, $state.AppsTrimmedMB))
             $state.BlurredAt = $null
         }.GetNewClosure())
 
@@ -379,6 +442,14 @@
             param($e)
 
             $lw = $cfg.leakWatch
+
+            # Which app is in front, every tick: trimApps leaves alone anything
+            # you used in the last few minutes, not only what's in front now.
+            if ($lw -and $lw.trimApps -and $lw.trimApps.enabled) {
+                $front = $ctx.GetForegroundProcessName()
+                if ($front) { $state.LastFrontAt[$front] = Get-Date }
+            }
+
             if ($lw -and $lw.enabled -and
                 ((Get-Date) - $state.LastLeakCheckAt).TotalSeconds -ge $lw.everySeconds) {
                 $state.LastLeakCheckAt = Get-Date

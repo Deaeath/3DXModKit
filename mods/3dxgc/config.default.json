@@ -30,10 +30,22 @@
   "leakWatch": {
     "enabled": true,
     "everySeconds": 300,
-    "heldProcesses":   { "enabled": true, "warnAbove": 20000, "warnEveryMinutes": 60, "leakTest": true, "skipFocusedTrimAboveGB": 4.0 },
-    "processes":       { "enabled": true, "windowSamples": 6, "privateMBPerHour": 300, "minPrivateMB": 1024, "handlesPerHour": 2000, "minHandles": 20000, "warnEveryMinutes": 60,
-                         "ignore": ["3DXChat", "System", "Idle", "Memory Compression", "Registry"] },
-    "restartServices": { "enabled": true, "names": ["ArmouryCrateService"], "aboveHandles": 50000, "cooldownMinutes": 60 },
+    "heldProcesses": { "enabled": true, "warnAbove": 20000, "warnEveryMinutes": 60, "leakTest": true, "leakTestMinutes": 4, "skipFocusedTrimAboveGB": 4.0 },
+    "processes":     { "enabled": true, "windowSamples": 6, "privateMBPerHour": 300, "minPrivateMB": 1024, "handlesPerHour": 2000, "minHandles": 20000, "warnEveryMinutes": 60,
+                       "ignore": ["3DXChat", "System", "Idle", "Memory Compression", "Registry"] },
+    "trimApps":      { "enabled": true, "whenFreeBelowPercent": 100, "everyMinutes": 10, "backgroundMinutes": 5, "minWorkingSetMB": 200,
+                       "names": ["explorer", "Discord", "DiscordPTB", "DiscordCanary", "chrome", "opera", "msedge", "msedgewebview2",
+                                 "Spotify", "steam", "steamwebhelper", "EpicGamesLauncher", "EpicWebHelper", "OneDrive", "Overwolf", "Code"] },
+    "askToRestart":  { "enabled": true, "everyMinutes": 240,
+                       "apps": [
+                         { "name": "explorer",      "aboveMB": 1500 },
+                         { "name": "Discord",       "aboveMB": 3000 },
+                         { "name": "DiscordPTB",    "aboveMB": 3000 },
+                         { "name": "DiscordCanary", "aboveMB": 3000 }
+                       ],
+                       "services": [
+                         { "name": "ArmouryCrateService", "aboveHandles": 50000 }
+                       ] },
     "competingOptimizers": ["WiseMemoryOptimzer", "WiseMemoryOptimizer", "MemReduct", "CleanMem", "RAMRush"]
   },
 

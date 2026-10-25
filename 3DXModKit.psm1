@@ -422,4 +422,6 @@ Export-ModuleMember -Function @(
     'Resolve-ModKitLoadOrder'
     'ConvertTo-ModKitManifest'
     'Test-ModKitManifest'
+    'Restart-ModKitApp'
+    'Restart-ModKitService'
 )

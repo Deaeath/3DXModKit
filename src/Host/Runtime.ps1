@@ -121,6 +121,111 @@ function New-ModKitLogger {
 }
 
 # ---------------------------------------------------------------------------
+# App restart
+# ---------------------------------------------------------------------------
+
+function Restart-ModKitApp {
+    <#
+    .SYNOPSIS
+        Closes every process of a desktop app and relaunches it the way it was
+        started. Never the game.
+    .DESCRIPTION
+        Only ever called by the control panel, after you click its "restart?"
+        notification - no mod can restart anything. Closed without Success
+        means the app is gone and did not come back.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$GameProcessName = '3DXChat'
+    )
+
+    $r = [pscustomobject]@{ Success = $false; Closed = $false; Error = $null; ReopenedFolders = 0 }
+    if ($Name -ieq $GameProcessName) { $r.Error = 'never restarts the game'; return $r }
+
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='$($Name -replace "'", "''").exe'" -OperationTimeoutSec 10 -ErrorAction SilentlyContinue)
+    if ($procs.Count -eq 0) { $r.Error = 'not running'; return $r }
+
+    try {
+        if ($Name -ieq 'explorer') {
+            # Folder windows live inside the shell; note where they were so
+            # they reopen. Windows restarts the shell itself (AutoRestartShell)
+            # - start it only if it doesn't.
+            $folders = @()
+            try {
+                $folders = @((New-Object -ComObject Shell.Application).Windows() | ForEach-Object {
+                    try { $_.Document.Folder.Self.Path } catch { }
+                } | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique)
+            } catch { }
+            Stop-Process -Name explorer -Force -ErrorAction Stop
+            $r.Closed = $true
+            $deadline = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $deadline -and -not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 500 }
+            if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+            Start-Sleep -Seconds 3
+            foreach ($f in $folders) { Start-Process explorer.exe -ArgumentList ('"' + $f + '"'); $r.ReopenedFolders++ }
+            $r.Success = $true
+            return $r
+        }
+
+        # Relaunch the way it was started: the root process, the one whose
+        # parent isn't another copy of itself.
+        $ids  = @($procs | ForEach-Object { $_.ProcessId })
+        $root = $procs | Where-Object { $ids -notcontains $_.ParentProcessId -and $_.CommandLine -notmatch '--type=' } | Select-Object -First 1
+        if (-not $root -or -not $root.ExecutablePath) { $r.Error = 'cannot tell how it was started'; return $r }
+        $exe = $root.ExecutablePath
+        $launchArgs = ''
+        if ($root.CommandLine -match '^\s*("[^"]*"|\S+)\s*(.*)$') { $launchArgs = $matches[2].Trim() }
+
+        # Squirrel apps (Discord and friends) live in an app-x.y.z folder and
+        # restart through their own Update.exe, like their shortcut.
+        $appDir = Split-Path -Parent $exe
+        $update = Join-Path (Split-Path -Parent $appDir) 'Update.exe'
+        $squirrel = ((Split-Path -Leaf $appDir) -match '^app-\d') -and (Test-Path -LiteralPath $update)
+
+        foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        $deadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $deadline -and (Get-Process -Name $Name -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 500 }
+        if (Get-Process -Name $Name -ErrorAction SilentlyContinue) { $r.Error = 'would not close (it may be running as administrator)'; return $r }
+        $r.Closed = $true
+
+        if ($squirrel) {
+            Start-Process -FilePath $update -ArgumentList '--processStart', ('"' + (Split-Path -Leaf $exe) + '"')
+        } elseif ($launchArgs) {
+            Start-Process -FilePath $exe -ArgumentList $launchArgs -WorkingDirectory $appDir
+        } else {
+            Start-Process -FilePath $exe -WorkingDirectory $appDir
+        }
+        $r.Success = $true
+    } catch { $r.Error = $_.Exception.Message }
+    return $r
+}
+
+function Restart-ModKitService {
+    <#
+    .SYNOPSIS
+        Restarts a Windows service, after you click the control panel's
+        "restart?" notification. Unelevated, Windows asks first (UAC).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+
+    $r = [pscustomobject]@{ Success = $false; Error = $null }
+    try {
+        if ([ThreeDX.ModKit.Native.MemOps]::IsElevated()) {
+            Restart-Service -Name $Name -Force -ErrorAction Stop
+        } else {
+            $cmd = "Restart-Service -Name '$($Name -replace "'", "''")' -Force -ErrorAction Stop"
+            $p = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop `
+                -ArgumentList "-NoProfile -Command `"$cmd`""
+            if ($p.ExitCode -ne 0) { throw "restart failed (exit code $($p.ExitCode))" }
+        }
+        $r.Success = $true
+    } catch { $r.Error = $_.Exception.Message }
+    return $r
+}
+
+# ---------------------------------------------------------------------------
 # Mod context (capability-gated)
 # ---------------------------------------------------------------------------
 
@@ -208,6 +313,11 @@ function New-ModKitContext {
             } catch { }
             return $null
         }
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetForegroundProcessName -Value {
+            $fg = [ThreeDX.ModKit.Native.MemOps]::GetForegroundPid()
+            if ($fg -le 0) { return $null }
+            try { return [System.Diagnostics.Process]::GetProcessById($fg).ProcessName } catch { return $null }
+        }
         $ctx | Add-Member -MemberType ScriptMethod -Name IsGameMinimized -Value {
             if ($this._host.GamePid -le 0) { return $false }
             return [ThreeDX.ModKit.Native.MemOps]::IsProcessMinimized($this._host.GamePid)
@@ -256,16 +366,22 @@ function New-ModKitContext {
     }
 
     # --- memory.diagnose --------------------------------------------------
-    # Finds memory that trimming can never return: exited processes a driver
-    # is still holding, and processes that only ever grow. Read-only, except
-    # that RunLeakTest starts a few short whoami.exe processes.
+    # Finds leaks: exited processes a driver is still holding, processes and
+    # services that only ever grow, and whether an app is in use right now.
+    # Read-only, except that StartLeakTest starts a few short whoami.exe
+    # processes. Nothing here closes or restarts anything - no mod can; only
+    # the control panel can, and only when you click its notification.
     if ($caps -contains 'memory.diagnose') {
         $ctx | Add-Member -MemberType ScriptMethod -Name GetKernelLeak -Value {
             return [ThreeDX.ModKit.Native.MemOps]::GetKernelLeak()
         }
-        $ctx | Add-Member -MemberType ScriptMethod -Name RunLeakTest -Value {
+        $ctx | Add-Member -MemberType ScriptMethod -Name StartLeakTest -Value {
             param([int]$Count = 6)
-            return [ThreeDX.ModKit.Native.MemOps]::RunLeakTest($Count)
+            return [ThreeDX.ModKit.Native.MemOps]::StartLeakTest($Count)
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name CountHeld -Value {
+            param([int[]]$ProcessIds)
+            return [ThreeDX.ModKit.Native.MemOps]::CountHeld($ProcessIds)
         }
         $ctx | Add-Member -MemberType ScriptMethod -Name GetProcessSample -Value {
             # One row per process - only what growth tracking needs.
@@ -274,16 +390,11 @@ function New-ModKitContext {
                     Id           = $_.Id
                     Name         = $_.ProcessName
                     PrivateBytes = $_.PrivateMemorySize64
+                    WorkingSet   = $_.WorkingSet64
                     Handles      = $_.HandleCount
                 }
             })
         }
-    }
-
-    # --- service.restart --------------------------------------------------
-    # For services with a known leak (e.g. one that piles up handles until the
-    # PC runs out of kernel memory). The mod passes names from its own config.
-    if ($caps -contains 'service.restart') {
         $ctx | Add-Member -MemberType ScriptMethod -Name GetServiceHandles -Value {
             # Handle count of the service's process, or -1 if it isn't running.
             param([string]$Name)
@@ -293,15 +404,41 @@ function New-ModKitContext {
                 return (Get-Process -Id $svc.ProcessId -ErrorAction Stop).HandleCount
             } catch { return -1 }
         }
-        $ctx | Add-Member -MemberType ScriptMethod -Name RestartService -Value {
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetAppActivity -Value {
+            # Is anyone using this app right now? When in doubt, say yes.
             param([string]$Name)
-            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $procs = @(Get-Process -Name $Name -ErrorAction SilentlyContinue)
+            $a = [pscustomobject]@{ Running = ($procs.Count -gt 0); PrivateMB = 0; Foreground = $false
+                                    Sound = $false; Camera = $false; Microphone = $false }
+            if (-not $a.Running) { return $a }
+
+            $ids = @($procs | ForEach-Object { $_.Id })
+            $a.PrivateMB  = [math]::Round(($procs | Measure-Object PrivateMemorySize64 -Sum).Sum / 1MB)
+            $a.Foreground = $ids -contains [ThreeDX.ModKit.Native.MemOps]::GetForegroundPid()
             try {
-                Restart-Service -Name $Name -Force -ErrorAction Stop
-                return [pscustomobject]@{ Success = $true; Error = $null; Seconds = [int]$sw.Elapsed.TotalSeconds }
-            } catch {
-                return [pscustomobject]@{ Success = $false; Error = $_.Exception.Message; Seconds = [int]$sw.Elapsed.TotalSeconds }
+                $playing = [ThreeDX.ModKit.Native.AudioActivity]::GetActiveProcessIds()
+                $a.Sound = @($playing | Where-Object { $ids -contains $_ }).Count -gt 0
+            } catch { $a.Sound = $true }
+
+            # Windows' own in-use markers (the taskbar's camera and mic icons). A
+            # crash can leave one stuck "on"; those are older than the running
+            # copy, so only markers stamped after it started count.
+            $started = @($procs | ForEach-Object { try { $_.StartTime.ToFileTime() } catch { } })
+            $since   = if ($started.Count) { ($started | Measure-Object -Minimum).Minimum } else { 0 }
+            $paths   = @($procs | ForEach-Object { try { $_.Path } catch { } } | Where-Object { $_ } | Select-Object -Unique)
+            $store   = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+            foreach ($cap in 'webcam', 'microphone') {
+                foreach ($path in $paths) {
+                    $v = Get-ItemProperty -LiteralPath "$store\$cap\NonPackaged\$($path -replace '\\', '#')" -ErrorAction SilentlyContinue
+                    if (-not $v) { continue }
+                    $stop  = $v.PSObject.Properties['LastUsedTimeStop']
+                    $start = $v.PSObject.Properties['LastUsedTimeStart']
+                    if ($stop -and $start -and [long]$stop.Value -eq 0 -and [long]$start.Value -ge $since) {
+                        if ($cap -eq 'webcam') { $a.Camera = $true } else { $a.Microphone = $true }
+                    }
+                }
             }
+            return $a
         }
     }
 

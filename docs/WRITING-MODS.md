@@ -66,8 +66,9 @@ See the full catalog:
 | `process.query` | `GetGamePid`, `GetProcessMemory`, `GetSystemMemory`, `GetIdleSeconds`, `IsGameForeground`, `IsGameMinimized` |
 | `memory.trim.self` | `TrimGame`, `TrimProcess`, `TrimByName` — no elevation needed |
 | `memory.trim.system` | `PurgeStandbyList`, `FlushModifiedPageList`, `EmptySystemWorkingSet`, `EmptyAllWorkingSets`, `EmptyAll`, `IsElevated` — admin required |
-| `memory.diagnose` | `GetKernelLeak` (exited processes the kernel still holds), `RunLeakTest`, `GetProcessSample` |
-| `service.restart` | `GetServiceHandles`, `RestartService` — admin required |
+| `memory.diagnose` | `GetKernelLeak` (exited processes the kernel still holds), `StartLeakTest` + `CountHeld` (check minutes later, not seconds), `GetProcessSample`, `GetServiceHandles`, `GetAppActivity` (front window, sound, mic, camera — errs towards "in use") |
+
+No capability lets a mod close or restart an app, a service or Windows. A mod can only log a question; the control panel turns it into its prompt card and restarts nothing unless the user presses Restart (`Restart-ModKitApp`, `Restart-ModKitService`).
 | `process.priority` | `SetGamePriority` |
 | `ipc.runtime` | `SendRuntimeCommand`, `IsRuntimeAvailable` — machine-local named pipe |
 | `fs.write.config` | `SaveState`, `LoadState` |
