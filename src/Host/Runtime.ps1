@@ -502,19 +502,11 @@ function New-ModKitContext {
             return Clear-ModKitCaps
         }
         $ctx | Add-Member -MemberType ScriptMethod -Name GetSessionProcesses -Value {
-            # Every process in your desktop session, with its parent - what
-            # capping chooses from. Services in session 0 are never touched.
+            # Every process in your desktop session - id, parent, name, working
+            # set, fault count - from one kernel call. What capping chooses
+            # from; services in session 0 are never touched.
             $session = (Get-Process -Id $PID).SessionId
-            $ws = @{}
-            foreach ($p in Get-Process -ErrorAction SilentlyContinue) { if ($p.SessionId -eq $session) { $ws[$p.Id] = $p.WorkingSet64 } }
-            return @(Get-CimInstance Win32_Process -OperationTimeoutSec 10 -ErrorAction SilentlyContinue | Where-Object { $ws.ContainsKey([int]$_.ProcessId) } | ForEach-Object {
-                [pscustomobject]@{
-                    Id         = [int]$_.ProcessId
-                    ParentId   = [int]$_.ParentProcessId
-                    Name       = [IO.Path]::GetFileNameWithoutExtension($_.Name)
-                    WorkingSet = $ws[[int]$_.ProcessId]
-                }
-            })
+            return @([ThreeDX.ModKit.Native.MemOps]::GetProcessList() | Where-Object { $_.SessionId -eq $session })
         }
     }
 
@@ -625,6 +617,13 @@ function New-ModKitContext {
         $ctx | Add-Member -MemberType ScriptMethod -Name LoadState -Value {
             $path = Join-Path $this._host.ConfigRoot ($this.ModId + '.state.json')
             return Read-ModKitJsonFile -Path $path
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name WriteStatus -Value {
+            # What the mod is doing right now, for the control panel to show.
+            # Its own file, rewritten whole each time - never your settings.
+            param([hashtable]$Status)
+            $path = Join-Path $this._host.ConfigRoot ($this.ModId + '.status.json')
+            try { $Status | ConvertTo-Json -Depth 6 -Compress | Set-Content -LiteralPath $path -Encoding UTF8 } catch { }
         }
     }
 

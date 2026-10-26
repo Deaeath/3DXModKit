@@ -765,23 +765,54 @@ function Get-CapsRunning {
     return $h
 }
 
+# What the governor last reported (config\3dxgc.status.json), or $null when
+# it's stale - the governor isn't running.
+function Get-CapsStatus {
+    $path = Join-Path $ModKitRoot 'config\3dxgc.status.json'
+    try {
+        $s = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json
+        if (((Get-Date) - [datetime]$s.at).TotalSeconds -gt 90) { return $null }
+        return $s
+    } catch { return $null }
+}
+
 function Set-CapRowLive {
-    param($Row, $Running)
+    param($Row, $Running, $Status)
     if (-not $Running.ContainsKey($Row.App)) { $Row.UsingText = '-'; $Row.Status = 'not running'; return }
     $e = $Running[$Row.App]
     $Row.UsingText = '{0:N0} MB' -f ($e.WS / 1MB)
-    $Row.Status = if ($e.Capped -gt 0) { 'capped at {0:N0} MB' -f ($e.Cap / 1MB) }
+    $s = $null
+    if ($Status -and $Status.apps -and $Status.apps.PSObject.Properties[$Row.App]) { $s = $Status.apps.($Row.App) }
+    $Row.Status = if ($e.Capped -gt 0) {
+                      $f = if ($s -and $s.faults -ge 300) { ' - paging {0:N0}/s, getting room' -f $s.faults } else { '' }
+                      'capped at {0:N0} MB{1}' -f ($e.Cap / 1MB), $f
+                  }
                   elseif ($Row.Never) { 'never capped' }
-                  else { 'not capped (in front, just left it, or under its cap)' }
+                  elseif ($s -and $s.state -eq 'front') { 'in front - not capped while you use it' }
+                  elseif ($s -and $s.state -like 'waiting:*') { 'just left - capped in {0} s' -f ($s.state -split ':')[1] }
+                  elseif ($s -and $s.state -eq 'spared') { 'on a call or playing sound - spared' }
+                  elseif ($s -and $s.state -eq 'under') { 'under the "any other app" line - not capped' }
+                  elseif (-not $Status) { 'not capped (the governor isn''t running)' }
+                  else { 'not capped' }
 }
 
 function Update-CapsSummary {
-    param($Running)
+    param($Running, $Status)
     $sys = $M::GetSystemMemory()
     $capped = @($Running.Values | Where-Object { $_.Capped -gt 0 })
-    $UI.TxtCapsSummary.Text = ("Free now: {0} of {1} GB. {2} app(s) capped, held to {3:N0} MB between them. While free RAM is under your target, " +
-        "every cap tightens until it isn't. The app in front (and everything it started), the game, 3dxGC and Windows' own " +
-        "display, input and audio pieces are never capped.") -f $sys.AvailPhysGB, $sys.TotalPhysGB, $capped.Count, (($capped | Measure-Object Cap -Sum).Sum / 1MB)
+    $line = "Free now: {0} of {1} GB. {2} app(s) capped, held to {3:N0} MB between them." -f `
+        $sys.AvailPhysGB, $sys.TotalPhysGB, $capped.Count, (($capped | Measure-Object Cap -Sum).Sum / 1MB)
+    if ($Status -and $Status.enabled -and $Status.targetGB -gt 0) {
+        $line += if ($Status.holding) {
+            " Free RAM is under your {0} GB target, but squeezing further frees nothing - what's left is in use (the game, Windows, drivers, apps' active memory). Caps are holding at {1:P0} of their allowance." -f $Status.targetGB, $Status.factor
+        } elseif ($Status.factor -lt 1) {
+            " Caps are squeezed to {0:P0} of their allowance to keep {1} GB free." -f $Status.factor, $Status.targetGB
+        } else {
+            " Above your {0} GB target - caps at their full allowance." -f $Status.targetGB
+        }
+    }
+    $line += " Each app's cap settles at what it actually uses: one paging hard against its cap gets room (squeezing it frees nothing), one sitting quietly gets pushed lower. The app in front (and everything it started), the game, 3dxGC and Windows' display, input and audio pieces are never capped."
+    $UI.TxtCapsSummary.Text = $line
 }
 
 # Rebuild the tab: settings, plus every app over 100 MB that's running now.
@@ -802,6 +833,7 @@ function Update-CapsTab {
     $names   = @(@($caps.Keys) + $never + @($running.Keys | Where-Object { $running[$_].WS -ge 100MB })) | Sort-Object -Unique
     $names   = $names | Sort-Object { if ($running.ContainsKey($_)) { -$running[$_].WS } else { 0 } }
 
+    $status = Get-CapsStatus
     $Script:CapRows.Clear()
     foreach ($n in $names) {
         $row = New-Object ThreeDX.ModKit.Gui.CapRow
@@ -809,10 +841,10 @@ function Update-CapsTab {
         $row.Display = Get-FriendlyName $n
         $row.CapMB   = if ($caps.ContainsKey($n)) { $caps[$n] } else { '' }
         $row.Never   = $never -contains $n
-        Set-CapRowLive $row $running
+        Set-CapRowLive $row $running $status
         $Script:CapRows.Add($row)
     }
-    Update-CapsSummary $running
+    Update-CapsSummary $running $status
     $Script:CapsLiveAt = Get-Date
 }
 
@@ -820,8 +852,9 @@ function Update-CapsTab {
 function Update-CapsLive {
     $ca = Get-CapsSettings
     $running = Get-CapsRunning @($ca.protect | Where-Object { $_ })
-    foreach ($row in $Script:CapRows) { Set-CapRowLive $row $running }
-    Update-CapsSummary $running
+    $status = Get-CapsStatus
+    foreach ($row in $Script:CapRows) { Set-CapRowLive $row $running $status }
+    Update-CapsSummary $running $status
     $Script:CapsLiveAt = Get-Date
 }
 

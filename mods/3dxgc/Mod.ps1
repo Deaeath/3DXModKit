@@ -49,6 +49,16 @@
             CapFactor        = 1.0   # how hard caps are squeezed to reach the keep-free target
             LastCapPass      = [datetime]::MinValue
             LastSqueezeAt    = [datetime]::MinValue
+            Learned          = @{}   # pid -> the ceiling it has settled at, under its allowance
+            RaisedAt         = @{}   # pid -> when its ceiling was last raised for churning
+            CapMovedAt       = @{}   # pid -> when its ceiling was last set or moved
+            Faults           = @{}   # pid -> page faults at the last pass
+            FaultsAt         = [datetime]::MinValue
+            Holding          = $false # the last squeeze freed nothing - stop squeezing
+            SqueezeFree      = 0.0   # free RAM (GB) when the factor last moved
+            SqueezedOnce     = $false
+            HoldLoggedAt     = [datetime]::MinValue
+            DiskWarnedAt     = [datetime]::MinValue
             LastFrontPid     = 0
             LastGameTrim     = $null # { BeforeMB; AfterMB } of the game's last trim
             PeriodicSeconds  = 0     # current periodic interval, stretched while trims don't stick
@@ -361,7 +371,20 @@
                 if ($asked) { $ctx.SaveState($saved) }
             }
 
-            # 5. Another optimiser emptying working sets alongside this one.
+            # 5. The system drive running out. When memory is committed past
+            #    RAM, Windows grows the page file there - and a full system
+            #    drive can take Windows down with it.
+            $diskLine = if ($lw.diskWarnBelowGB) { [double]$lw.diskWarnBelowGB } else { 5.0 }
+            try {
+                $drive = New-Object System.IO.DriveInfo($env:SystemDrive)
+                $diskFree = $drive.AvailableFreeSpace / 1GB
+                if ($diskFree -lt $diskLine -and ($now - $state.DiskWarnedAt).TotalMinutes -ge 60) {
+                    $state.DiskWarnedAt = $now
+                    $ctx.LogWarn(("only {0:N1} GB left on {1} - Windows grows the page file there when memory is committed past your RAM, and a full system drive can crash Windows. Free some space." -f $diskFree, $env:SystemDrive))
+                }
+            } catch { }
+
+            # 6. Another optimiser emptying working sets alongside this one.
             foreach ($name in $optimizers) {
                 if ($state.OptimizersWarned.ContainsKey($name)) { continue }
                 if (@($sample | Where-Object { $_.Name -eq $name }).Count -gt 0) {
@@ -379,8 +402,18 @@
         # memory priority so theirs is the first RAM taken when anything needs
         # it. Trimming only asks; a cap insists. The app in front - and
         # everything it started - is never capped, nor are the game and 3dxGC.
-        # While free RAM is under the keep-free target every cap is squeezed
-        # further; once there's room again they relax. Settings are re-read on
+        #
+        # Each process's ceiling finds its own level under its allowance. A
+        # cap below what a process actively uses frees nothing - its pages
+        # just bounce through the standby list, which Windows counts as free
+        # anyway - and burns CPU on page faults. So a process faulting hard
+        # against its cap gets room; one sitting quietly at its cap is pushed
+        # a step lower, to see whether idle memory goes with it. Every app ends
+        # up holding what it uses and nothing more.
+        #
+        # The keep-free target squeezes every allowance a step at a time while
+        # that frees RAM, holds when a step freed nothing (what's left is in
+        # use), and backs off when capped apps churn. Settings are re-read on
         # every pass, so the control panel's Caps tab applies without a restart.
 
         $capPass = {
@@ -388,12 +421,33 @@
             if ($fresh -and $fresh.leakWatch -and $fresh.leakWatch.capApps) { $cfg.leakWatch.capApps = $fresh.leakWatch.capApps }
             $ca = $cfg.leakWatch.capApps
             if (-not $ca -or -not $ca.enabled) {
-                if ($state.Caps.Count -gt 0) { [void]$ctx.ReleaseAllCaps(); $state.Caps.Clear(); $ctx.Log('caps off - every cap lifted') }
+                if ($state.Caps.Count -gt 0) {
+                    [void]$ctx.ReleaseAllCaps(); $state.Caps.Clear(); $state.Learned.Clear()
+                    $ctx.Log('caps off - every cap lifted')
+                }
+                $ctx.WriteStatus(@{ at = (Get-Date).ToString('o'); enabled = $false })
                 return
             }
             $now   = Get-Date
             $procs = @($ctx.GetSessionProcesses())
             if ($procs.Count -eq 0) { return }
+            $byId = @{}
+            foreach ($p in $procs) { $byId[$p.Id] = $p }
+
+            # Faults per second since the last pass: how hard each process is
+            # paging against its cap.
+            $rate = @{}
+            $dt = ($now - $state.FaultsAt).TotalSeconds
+            if ($dt -gt 0 -and $dt -lt 300) {
+                foreach ($p in $procs) {
+                    if ($state.Faults.ContainsKey($p.Id)) { $rate[$p.Id] = ([double]$p.PageFaults - [double]$state.Faults[$p.Id]) / $dt }
+                }
+            }
+            $state.Faults.Clear()
+            foreach ($p in $procs) { $state.Faults[$p.Id] = $p.PageFaults }
+            $state.FaultsAt = $now
+            $churn = 0.0
+            foreach ($id in $state.Caps.Keys) { if ($rate.ContainsKey($id) -and $rate[$id] -gt 0) { $churn += $rate[$id] } }
 
             # The app in front: every process with its name, and all they started -
             # except when that's the shell, which started nearly everything.
@@ -415,43 +469,65 @@
                 if ($withTree -and $children.ContainsKey($id)) { foreach ($c in $children[$id]) { $queue.Enqueue($c) } }
             }
 
-            # Squeeze towards the keep-free target, relax once there's room.
+            # Keep-free target. One step per interval, however often app switches
+            # trigger a pass. Back off when capped apps churn; hold when the last
+            # squeeze freed nothing (and try again only once free RAM drops
+            # further); squeeze only while caps are actually biting.
             $sys    = $ctx.GetSystemMemory()
-            $target = if ($ca.keepFreeGB -gt 0) { $ca.keepFreeGB } elseif ($ca.keepFreePercent -gt 0) { $sys.TotalPhysGB * $ca.keepFreePercent / 100 } else { 0 }
+            $free   = $sys.AvailPhysBytes / 1GB
+            $target = if ($ca.keepFreeGB -gt 0) { [double]$ca.keepFreeGB } elseif ($ca.keepFreePercent -gt 0) { $sys.TotalPhysGB * $ca.keepFreePercent / 100 } else { 0.0 }
             $was    = $state.CapFactor
             $step   = if ($ca.everySeconds) { $ca.everySeconds } else { 15 }
+            $churnLimit = if ($ca.churnLimit) { [double]$ca.churnLimit } else { 20000.0 }
             if ($target -le 0) {
-                $state.CapFactor = 1.0
+                $state.CapFactor = 1.0; $state.Holding = $false
             } elseif (($now - $state.LastSqueezeAt).TotalSeconds -ge $step) {
-                # One step per interval, however often app switches trigger a
-                # pass - and only tighten while caps are actually biting:
-                # squeezing during the grace period just overshoots.
                 $state.LastSqueezeAt = $now
-                $minFactor = if ($ca.minFactor) { $ca.minFactor } else { 0.1 }
-                if ($sys.AvailPhysGB -lt $target) {
-                    if ($state.Caps.Count -gt 0) { $state.CapFactor = [math]::Max($minFactor, $state.CapFactor * 0.85) }
-                } elseif ($sys.AvailPhysGB -gt $target + 2) {
+                $minFactor = if ($ca.minFactor) { [double]$ca.minFactor } else { 0.1 }
+                if ($churn -gt $churnLimit) {
                     $state.CapFactor = [math]::Min(1.0, $state.CapFactor / 0.85)
+                    if (-not $state.Holding) {
+                        $ctx.Log(("capped apps are paging {0:N0} times a second against their caps - that costs CPU and frees nothing, so caps step back to {1:P0}" -f $churn, $state.CapFactor))
+                    }
+                    $state.Holding = $true; $state.SqueezeFree = $free
+                } elseif ($free -lt $target) {
+                    if ($state.Holding -and $free -lt $state.SqueezeFree - 0.5) { $state.Holding = $false }
+                    if (-not $state.Holding -and $state.SqueezedOnce -and ($free - $state.SqueezeFree) -lt 0.125) {
+                        $state.Holding = $true
+                        $msg = "free RAM {0:N1} GB is under the {1:N1} GB target, but the last squeeze freed nothing - what's left is in use (the game, Windows, drivers, apps' active memory). Holding caps at {2:P0}." -f $free, $target, $state.CapFactor
+                        if (($now - $state.HoldLoggedAt).TotalMinutes -ge 10) { $state.HoldLoggedAt = $now; $ctx.Log($msg) } else { $ctx.LogDebug($msg) }
+                    }
+                    if (-not $state.Holding -and $state.Caps.Count -gt 0 -and $state.CapFactor -gt $minFactor) {
+                        $state.CapFactor = [math]::Max($minFactor, $state.CapFactor * 0.85)
+                        $state.SqueezeFree = $free; $state.SqueezedOnce = $true
+                    }
+                } elseif ($free -gt $target + 2) {
+                    $state.CapFactor = [math]::Min(1.0, $state.CapFactor / 0.85)
+                    $state.Holding = $false; $state.SqueezedOnce = $false
                 }
             }
             if ([math]::Floor($was * 10) -ne [math]::Floor($state.CapFactor * 10)) {
-                $ctx.Log(("free RAM {0} GB against a {1:N1} GB target - caps now at {2:P0} of their size" -f $sys.AvailPhysGB, $target, $state.CapFactor))
+                $ctx.Log(("free RAM {0:N1} GB against a {1:N1} GB target - caps at {2:P0} of their allowance" -f $free, $target, $state.CapFactor))
             }
             $factor = $state.CapFactor
 
             $budgets = @{}
             foreach ($a in @($ca.apps | Where-Object { $_ -and $_.name })) { $budgets[$a.name] = [double]$a.backgroundMB }
-            $never   = @(@($ca.protect) + @($ca.never) | Where-Object { $_ })
-            $gamePid = $ctx.GetGamePid()
-            $grace   = if ($null -ne $ca.graceMinutes) { $ca.graceMinutes } else { 2 }
+            $never     = @(@($ca.protect) + @($ca.never) | Where-Object { $_ })
+            $gamePid   = $ctx.GetGamePid()
+            $grace     = if ($null -ne $ca.graceMinutes) { $ca.graceMinutes } else { 2 }
+            $churnPer  = if ($ca.churnPerProcess) { [double]$ca.churnPerProcess } else { 300.0 }
+            $floor     = [double]16MB
+            $appState  = @{}   # app name -> what's happening to it, for the control panel
 
             # Background apps, by name.
             $groups = @{}
             foreach ($p in $procs) {
-                if ($front.ContainsKey($p.Id) -or $p.Id -eq $gamePid) { continue }
+                if ($p.Id -eq $gamePid) { continue }
+                if ($front.ContainsKey($p.Id)) { $appState[$p.Name] = 'front'; continue }
                 $spared = $false
                 foreach ($pat in $never) { if ($p.Name -like $pat) { $spared = $true; break } }
-                if ($spared) { continue }
+                if ($spared) { $appState[$p.Name] = 'never'; continue }
                 if (-not $groups.ContainsKey($p.Name)) { $groups[$p.Name] = New-Object System.Collections.Generic.List[psobject] }
                 $groups[$p.Name].Add($p)
             }
@@ -459,22 +535,58 @@
 
             $wanted = @{}   # pid -> ceiling in bytes
             foreach ($name in $groups.Keys) {
-                if (-not $state.CapAwaySince.ContainsKey($name)) { $state.CapAwaySince[$name] = $now }
-                if (($now - $state.CapAwaySince[$name]).TotalMinutes -lt $grace) { continue }
                 $g = $groups[$name]
+                # Allowance per process: the app's (shared by how much each
+                # process holds), or the "any other app" one for a process over
+                # that line. Squeezed by the keep-free factor.
+                $allow = @{}
+                if ($budgets.ContainsKey($name)) {
+                    $budget = $budgets[$name] * 1MB * $factor
+                    $total  = [math]::Max(1.0, [double](($g | Measure-Object WorkingSet -Sum).Sum))
+                    foreach ($p in $g) { $allow[$p.Id] = [math]::Max($floor, $budget * [double]$p.WorkingSet / $total) }
+                } elseif ($ca.everyoneElseMB -gt 0) {
+                    $line = [double]$ca.everyoneElseMB * 1MB
+                    foreach ($p in $g) {
+                        if ([double]$p.WorkingSet -gt $line -or $state.Caps.ContainsKey($p.Id)) { $allow[$p.Id] = [math]::Max($floor, $line * $factor) }
+                    }
+                }
+                if ($allow.Count -eq 0) { $appState[$name] = 'under'; continue }
+
+                if (-not $state.CapAwaySince.ContainsKey($name)) { $state.CapAwaySince[$name] = $now }
+                $waited = ($now - $state.CapAwaySince[$name]).TotalMinutes
+                if ($waited -lt $grace) { $appState[$name] = 'waiting:{0:N0}' -f (($grace - $waited) * 60); continue }
                 if ($ca.spareWhilePlaying) {
                     $act = $ctx.GetAppActivity($name)
-                    if ($act.Sound -or $act.Microphone -or $act.Camera) { continue }
+                    if ($act.Sound -or $act.Microphone -or $act.Camera) { $appState[$name] = 'spared'; continue }
                 }
-                if ($budgets.ContainsKey($name)) {
-                    # The app's allowance, shared out by how much each process holds.
-                    $budget = $budgets[$name] * 1MB * $factor
-                    $total  = [math]::Max(1, ($g | Measure-Object WorkingSet -Sum).Sum)
-                    foreach ($p in $g) { $wanted[$p.Id] = [long][math]::Max(16MB, $budget * $p.WorkingSet / $total) }
-                } elseif ($ca.everyoneElseMB -gt 0) {
-                    $limit = [long][math]::Max(16MB, $ca.everyoneElseMB * 1MB * $factor)
-                    foreach ($p in $g) { if ($p.WorkingSet -gt $limit -or $state.Caps.ContainsKey($p.Id)) { $wanted[$p.Id] = $limit } }
+                $appState[$name] = 'capped'
+
+                foreach ($id in $allow.Keys) {
+                    $a  = $allow[$id]
+                    $l  = if ($state.Learned.ContainsKey($id)) { [double]$state.Learned[$id] } else { $a }
+                    $ws = [double]$byId[$id].WorkingSet
+                    # Judge only a ceiling that has held for a whole interval - the
+                    # first moments after a cap moves always fault, while Windows
+                    # finds out which pages are actually in use.
+                    $settled = $state.CapMovedAt.ContainsKey($id) -and ($now - $state.CapMovedAt[$id]).TotalSeconds -ge $step
+                    if ($state.Caps.ContainsKey($id) -and $rate.ContainsKey($id) -and $settled) {
+                        if ($rate[$id] -ge $churnPer) {
+                            # Paging what it uses: room, since squeezing it frees nothing.
+                            $raised = [math]::Min($a, [math]::Max($l, $ws) * 1.5)
+                            if ($raised -gt $l) { $l = $raised; $state.RaisedAt[$id] = $now }
+                        } elseif ($rate[$id] -lt 20 -and $ws -ge 0.9 * $l -and
+                                  (-not $state.RaisedAt.ContainsKey($id) -or ($now - $state.RaisedAt[$id]).TotalSeconds -ge 60)) {
+                            # Quiet at its ceiling: push a step lower and see if idle memory goes.
+                            $l = $l * 0.85
+                        }
+                    }
+                    $l = [math]::Max($floor, [math]::Min($a, $l))
+                    $state.Learned[$id] = $l
+                    $wanted[$id] = [long]$l
                 }
+            }
+            foreach ($id in @($state.Learned.Keys)) {
+                if (-not $wanted.ContainsKey($id)) { $state.Learned.Remove($id); $state.RaisedAt.Remove($id); $state.CapMovedAt.Remove($id) }
             }
 
             # Lift what's no longer wanted: came to the front, quit, or set to never.
@@ -496,6 +608,7 @@
                     $ctx.LogDebug("could not cap pid ${id}: $(if ($r) { $r.Error } else { 'refused' })")
                     continue
                 }
+                $state.CapMovedAt[$id] = $now
                 if (-not $old) {
                     if ($ca.lowPriority) { [void]$ctx.SetMemoryPriority($id, 2) }
                     $p = $procs | Where-Object { $_.Id -eq $id } | Select-Object -First 1
@@ -509,6 +622,27 @@
                 $last = $state.CapAnnounced[$name]
                 if (-not $last -or ($now - $last).TotalMinutes -ge 30) { $state.CapAnnounced[$name] = $now; $ctx.Log($msg) } else { $ctx.LogDebug($msg) }
             }
+
+            # For the control panel's Caps tab: what's happening to each app.
+            $apps = @{}
+            foreach ($p in $procs) {
+                $st = $appState[$p.Name]
+                if (-not $st) { continue }
+                if (-not $apps.ContainsKey($p.Name)) { $apps[$p.Name] = @{ state = $st; usingMB = 0.0; capMB = 0.0; faults = 0.0 } }
+                $e = $apps[$p.Name]
+                $e.usingMB += [double]$p.WorkingSet / 1MB
+                if ($state.Caps.ContainsKey($p.Id)) { $e.capMB += [double]$state.Caps[$p.Id] / 1MB }
+                if ($rate.ContainsKey($p.Id) -and $rate[$p.Id] -gt 0) { $e.faults += $rate[$p.Id] }
+            }
+            foreach ($name in @($apps.Keys)) {
+                $e = $apps[$name]
+                if ($e.usingMB -lt 50 -and $e.capMB -eq 0) { $apps.Remove($name); continue }
+                $e.usingMB = [math]::Round($e.usingMB); $e.capMB = [math]::Round($e.capMB); $e.faults = [math]::Round($e.faults)
+            }
+            $ctx.WriteStatus(@{
+                at = $now.ToString('o'); enabled = $true; freeGB = [math]::Round($free, 2); targetGB = [math]::Round($target, 1)
+                factor = [math]::Round($factor, 2); holding = [bool]$state.Holding; churn = [math]::Round($churn); apps = $apps
+            })
             $state.LastCapPass = $now
         }.GetNewClosure()
 
@@ -688,7 +822,7 @@
                     $last   = $state.LastGameTrim
                     $nowMem = $ctx.GetProcessMemory($ctx.GetGamePid())
                     if ($last -and $nowMem) {
-                        $back = ($nowMem.WorkingSetMB - $last.AfterMB) / [math]::Max(1, $last.BeforeMB - $last.AfterMB)
+                        $back = ($nowMem.WorkingSetMB - $last.AfterMB) / [math]::Max(1.0, [double]($last.BeforeMB - $last.AfterMB))
                         if ($back -ge $inUse) {
                             if ($state.PeriodicSeconds -lt $max) {
                                 $state.PeriodicSeconds = [math]::Min($max, $state.PeriodicSeconds * 2)

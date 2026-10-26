@@ -146,6 +146,19 @@ namespace ThreeDX.ModKit.Native
         public double PeakWorkingSetMB { get { return Math.Round(PeakWorkingSetBytes / 1048576.0, 1); } }
     }
 
+    /// <summary>One process, as the kernel's own process list reports it.</summary>
+    public class ProcessEntry
+    {
+        public int Id;
+        public int ParentId;
+        public int SessionId;
+        public string Name;          // without .exe, like Get-Process
+        public long WorkingSet;
+        public long PrivateBytes;
+        public uint PageFaults;      // all faults since start - soft and hard
+        public uint HardFaults;      // faults that had to read the disk
+    }
+
     /// <summary>
     /// Exited processes the kernel is still holding. A healthy PC has a few
     /// dozen. A driver that keeps a reference to every process leaves one behind
@@ -495,6 +508,64 @@ namespace ThreeDX.ModKit.Native
                 CloseHandle(h);
             }
             return held;
+        }
+
+        #endregion
+
+        #region Process list
+
+        private const int SystemProcessInformation = 5;
+
+        /// <summary>
+        /// Every process with its parent, session, working set and fault counts,
+        /// in one kernel call - no WMI, no per-process handles. Milliseconds,
+        /// where Win32_Process takes most of a second.
+        /// </summary>
+        public static ProcessEntry[] GetProcessList()
+        {
+            int size = 1 << 20;
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                IntPtr buf = Marshal.AllocHGlobal(size);
+                try
+                {
+                    int needed;
+                    int status = NtQuerySystemInformation(SystemProcessInformation, buf, size, out needed);
+                    if (status == STATUS_INFO_LENGTH_MISMATCH) { size = Math.Max(size * 2, needed + 65536); continue; }
+                    if (status != 0) return new ProcessEntry[0];
+
+                    // SYSTEM_PROCESS_INFORMATION (x64): NextEntryOffset @0,
+                    // HardFaultCount @16, ImageName @56 (Length @56, Buffer @64),
+                    // UniqueProcessId @80, InheritedFromUniqueProcessId @88,
+                    // SessionId @100, PageFaultCount @128, WorkingSetSize @144,
+                    // PagefileUsage @184.
+                    var list = new List<ProcessEntry>();
+                    int off = 0;
+                    while (true)
+                    {
+                        IntPtr e = IntPtr.Add(buf, off);
+                        var p = new ProcessEntry();
+                        p.Id = (int)Marshal.ReadIntPtr(e, 80).ToInt64();
+                        p.ParentId = (int)Marshal.ReadIntPtr(e, 88).ToInt64();
+                        p.SessionId = Marshal.ReadInt32(e, 100);
+                        p.HardFaults = (uint)Marshal.ReadInt32(e, 16);
+                        p.PageFaults = (uint)Marshal.ReadInt32(e, 128);
+                        p.WorkingSet = Marshal.ReadIntPtr(e, 144).ToInt64();
+                        p.PrivateBytes = Marshal.ReadIntPtr(e, 184).ToInt64();
+                        int len = (ushort)Marshal.ReadInt16(e, 56);
+                        IntPtr name = Marshal.ReadIntPtr(e, 64);
+                        string image = (len > 0 && name != IntPtr.Zero) ? Marshal.PtrToStringUni(name, len / 2) : (p.Id == 0 ? "Idle" : "System");
+                        p.Name = image.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? image.Substring(0, image.Length - 4) : image;
+                        list.Add(p);
+                        int next = Marshal.ReadInt32(e, 0);
+                        if (next == 0) break;
+                        off += next;
+                    }
+                    return list.ToArray();
+                }
+                finally { Marshal.FreeHGlobal(buf); }
+            }
+            return new ProcessEntry[0];
         }
 
         #endregion

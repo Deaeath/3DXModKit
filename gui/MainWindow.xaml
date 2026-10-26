@@ -450,7 +450,7 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="APP" Style="{StaticResource Label}"/>
                 <TextBlock Grid.Column="1" Text="USING NOW" Style="{StaticResource Label}"/>
-                <TextBlock Grid.Column="2" Text="CAP (MB)" Style="{StaticResource Label}" ToolTip="Blank: the 'any other app' cap above"/>
+                <TextBlock Grid.Column="2" Text="CAP (MB)" Style="{StaticResource Label}" ToolTip="The most it gets in the background - it settles lower if it uses less. Blank: the 'any other app' cap above"/>
                 <TextBlock Grid.Column="3" Text="NEVER CAP" Style="{StaticResource Label}"/>
                 <TextBlock Grid.Column="4" Text="RIGHT NOW" Style="{StaticResource Label}"/>
               </Grid>
