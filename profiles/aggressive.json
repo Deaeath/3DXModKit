@@ -28,7 +28,7 @@
         "neverTrimWhenForeground": false
       },
       "leakWatch": {
-        "trimApps": { "everyMinutes": 5, "backgroundMinutes": 2, "minWorkingSetMB": 100 }
+        "capApps": { "keepFreePercent": 40, "graceMinutes": 1, "everyoneElseMB": 256 }
       }
     }
   }

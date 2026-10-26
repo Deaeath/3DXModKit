@@ -147,6 +147,53 @@ function Invoke-ModKitEmpty {
         [math]::Round(($after.AvailPhysBytes - $before.AvailPhysBytes)/1MB,1)) -ForegroundColor Cyan
 }
 
+function Get-ModKitModSettings {
+    <#
+    .SYNOPSIS
+        A mod's effective settings for a profile: its defaults, the profile's
+        block, then your overrides in config\<mod-id>.json - what the mod sees.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ModId,
+        [string]$ProfileName = 'default'
+    )
+    $manifest = ConvertTo-ModKitManifest -Path (Join-Path $Script:ModKitRoot "mods\$ModId\mod.json")
+    $profileCfg = $null
+    try {
+        $p = Get-ModKitProfile -ProfilesPath (Join-Path $Script:ModKitRoot 'profiles') -Name $ProfileName
+        if ($p.ModConfigs.ContainsKey($ModId)) { $profileCfg = $p.ModConfigs[$ModId] }
+    } catch { }
+    Get-ModKitModConfig -Manifest $manifest -ConfigRoot (Join-Path $Script:ModKitRoot 'config') -ProfileConfig $profileCfg
+}
+
+function Set-ModKitUserSetting {
+    <#
+    .SYNOPSIS
+        Writes one setting into your overrides (config\<mod-id>.json), keeping
+        everything else in that file. -Path is dotted, e.g. leakWatch.capApps;
+        -Value $null removes it. The governor re-reads settings it watches
+        live (caps), so those apply without a restart.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ModId,
+        [Parameter(Mandatory)][string]$Path,
+        [AllowNull()]$Value
+    )
+    $file = Join-Path $Script:ModKitRoot "config\$ModId.json"
+    $all = Read-ModKitJsonFile -Path $file
+    if ($null -eq $all) { $all = @{} }
+    $keys = $Path -split '\.'
+    $node = $all
+    for ($i = 0; $i -lt $keys.Count - 1; $i++) {
+        if (-not ($node[$keys[$i]] -is [hashtable])) { $node[$keys[$i]] = @{} }
+        $node = $node[$keys[$i]]
+    }
+    if ($null -eq $Value) { $node.Remove($keys[-1]) } else { $node[$keys[-1]] = $Value }
+    $all | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $file -Encoding UTF8
+}
+
 function Start-ModKit {
     <#
     .SYNOPSIS
@@ -225,7 +272,7 @@ function Start-ModKit {
             $profileCfg = $profileObj.ModConfigs[$manifest.Id]
         }
         $cfg = Get-ModKitModConfig -Manifest $manifest -ConfigRoot $hostObj.ConfigRoot -ProfileConfig $profileCfg
-        $ctx = New-ModKitContext -Manifest $manifest -Config $cfg -Bus $bus -Logger $logger -HostObject $hostObj
+        $ctx = New-ModKitContext -Manifest $manifest -Config $cfg -Bus $bus -Logger $logger -HostObject $hostObj -ProfileConfig $profileCfg
 
         try {
             $entryPath = Join-Path $manifest.Root $manifest.Entry
@@ -424,4 +471,7 @@ Export-ModuleMember -Function @(
     'Test-ModKitManifest'
     'Restart-ModKitApp'
     'Restart-ModKitService'
+    'Clear-ModKitCaps'
+    'Get-ModKitModSettings'
+    'Set-ModKitUserSetting'
 )

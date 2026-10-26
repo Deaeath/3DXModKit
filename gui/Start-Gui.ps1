@@ -556,6 +556,10 @@ function Update-Telemetry {
     Receive-UpdateCheck
     Receive-UpdateDownload
     Receive-AppRestart
+
+    if ($UI.Tabs.SelectedItem -eq $UI.TabCaps -and ((Get-Date) - $Script:CapsLiveAt).TotalSeconds -ge 5) {
+        try { Update-CapsLive } catch { }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -651,6 +655,8 @@ function Stop-Governor {
         try {
             if (-not $State.GovernorProcess.HasExited) { $State.GovernorProcess.Kill() }
         } catch { }
+        # Killed, it can't lift its own caps - so nothing stays capped, lift them here.
+        try { [void](Clear-ModKitCaps) } catch { }
     }
     $State.GovernorProcess = $null
     $UI.BtnGovernor.Content = 'Start'
@@ -699,6 +705,160 @@ function Update-ModList {
         $item.Foreground = $colour
         [void]$UI.LstMods.Items.Add($item)
     }
+}
+
+# ---------------------------------------------------------------------------
+# Caps tab
+#
+# Per-app RAM caps and the keep-free target, saved to config\3dxgc.json -
+# your overrides, which updates never touch. The governor re-reads caps on
+# every pass, so Save applies within seconds and nothing restarts.
+# ---------------------------------------------------------------------------
+
+if (-not ('ThreeDX.ModKit.Gui.CapRow' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System.ComponentModel;
+namespace ThreeDX.ModKit.Gui {
+    // One row of the Caps tab. Cap and Never are yours to edit; the live
+    // columns notify so they can refresh without disturbing an edit.
+    public class CapRow : INotifyPropertyChanged {
+        public event PropertyChangedEventHandler PropertyChanged;
+        void Changed(string p) { var h = PropertyChanged; if (h != null) h(this, new PropertyChangedEventArgs(p)); }
+        public string App { get; set; }
+        public string Display { get; set; }
+        public string CapMB { get; set; }
+        public bool Never { get; set; }
+        string usingText, status;
+        public string UsingText { get { return usingText; } set { usingText = value; Changed("UsingText"); } }
+        public string Status { get { return status; } set { status = value; Changed("Status"); } }
+    }
+}
+'@
+}
+
+$Script:CapRows = New-Object 'System.Collections.ObjectModel.ObservableCollection[ThreeDX.ModKit.Gui.CapRow]'
+$UI.LstCaps.ItemsSource = $Script:CapRows
+$Script:CapsLiveAt = [datetime]::MinValue
+
+function Get-CapsSettings {
+    $s = Get-ModKitModSettings -ModId '3dxgc' -ProfileName ([string]$UI.CmbProfile.SelectedItem)
+    if ($s.leakWatch -and $s.leakWatch.capApps) { return $s.leakWatch.capApps }
+    return @{}
+}
+
+# name -> { WS; Cap; Capped } for this desktop session, protected ones left out.
+function Get-CapsRunning {
+    param($Protect)
+    $session = (Get-Process -Id $PID).SessionId
+    $h = @{}
+    foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
+        if ($p.SessionId -ne $session) { continue }
+        $spared = $false
+        foreach ($pat in $Protect) { if ($p.ProcessName -like $pat) { $spared = $true; break } }
+        if ($spared) { continue }
+        if (-not $h.ContainsKey($p.ProcessName)) { $h[$p.ProcessName] = [pscustomobject]@{ WS = 0L; Cap = 0L; Capped = 0 } }
+        $e = $h[$p.ProcessName]
+        $e.WS += $p.WorkingSet64
+        $c = $M::GetCapBytes($p.Id)
+        if ($c -gt 0) { $e.Cap += $c; $e.Capped++ }
+    }
+    return $h
+}
+
+function Set-CapRowLive {
+    param($Row, $Running)
+    if (-not $Running.ContainsKey($Row.App)) { $Row.UsingText = '-'; $Row.Status = 'not running'; return }
+    $e = $Running[$Row.App]
+    $Row.UsingText = '{0:N0} MB' -f ($e.WS / 1MB)
+    $Row.Status = if ($e.Capped -gt 0) { 'capped at {0:N0} MB' -f ($e.Cap / 1MB) }
+                  elseif ($Row.Never) { 'never capped' }
+                  else { 'not capped (in front, just left it, or under its cap)' }
+}
+
+function Update-CapsSummary {
+    param($Running)
+    $sys = $M::GetSystemMemory()
+    $capped = @($Running.Values | Where-Object { $_.Capped -gt 0 })
+    $UI.TxtCapsSummary.Text = ("Free now: {0} of {1} GB. {2} app(s) capped, held to {3:N0} MB between them. While free RAM is under your target, " +
+        "every cap tightens until it isn't. The app in front (and everything it started), the game, 3dxGC and Windows' own " +
+        "display, input and audio pieces are never capped.") -f $sys.AvailPhysGB, $sys.TotalPhysGB, $capped.Count, (($capped | Measure-Object Cap -Sum).Sum / 1MB)
+}
+
+# Rebuild the tab: settings, plus every app over 100 MB that's running now.
+function Update-CapsTab {
+    $ca = Get-CapsSettings
+    $UI.ChkCapsOn.IsChecked     = [bool]$ca.enabled
+    $UI.TxtKeepFree.Text        = if ($ca.keepFreeGB -gt 0) { [string]$ca.keepFreeGB }
+                                  elseif ($ca.keepFreePercent -gt 0) { [string][math]::Round($M::GetSystemMemory().TotalPhysGB * $ca.keepFreePercent / 100) }
+                                  else { '0' }
+    $UI.TxtEveryoneElse.Text    = [string]$ca.everyoneElseMB
+    $UI.ChkSpareCalls.IsChecked = [bool]$ca.spareWhilePlaying
+    $UI.TxtCapsSaved.Text       = ''
+
+    $caps = @{}
+    foreach ($a in @($ca.apps | Where-Object { $_ })) { $caps[$a.name] = [string]$a.backgroundMB }
+    $never   = @($ca.never | Where-Object { $_ })
+    $running = Get-CapsRunning @($ca.protect | Where-Object { $_ })
+    $names   = @(@($caps.Keys) + $never + @($running.Keys | Where-Object { $running[$_].WS -ge 100MB })) | Sort-Object -Unique
+    $names   = $names | Sort-Object { if ($running.ContainsKey($_)) { -$running[$_].WS } else { 0 } }
+
+    $Script:CapRows.Clear()
+    foreach ($n in $names) {
+        $row = New-Object ThreeDX.ModKit.Gui.CapRow
+        $row.App     = $n
+        $row.Display = Get-FriendlyName $n
+        $row.CapMB   = if ($caps.ContainsKey($n)) { $caps[$n] } else { '' }
+        $row.Never   = $never -contains $n
+        Set-CapRowLive $row $running
+        $Script:CapRows.Add($row)
+    }
+    Update-CapsSummary $running
+    $Script:CapsLiveAt = Get-Date
+}
+
+# Refresh the live columns only, so an edit in progress isn't lost.
+function Update-CapsLive {
+    $ca = Get-CapsSettings
+    $running = Get-CapsRunning @($ca.protect | Where-Object { $_ })
+    foreach ($row in $Script:CapRows) { Set-CapRowLive $row $running }
+    Update-CapsSummary $running
+    $Script:CapsLiveAt = Get-Date
+}
+
+function Save-CapsTab {
+    $keep = 0.0
+    if (-not [double]::TryParse($UI.TxtKeepFree.Text, [ref]$keep) -or $keep -lt 0 -or $keep -gt $M::GetSystemMemory().TotalPhysGB) {
+        $UI.TxtCapsSaved.Text = ''; Set-Status "Keep free must be a number of GB between 0 and your RAM." $Colours.Warn; return
+    }
+    $other = 0
+    if (-not [int]::TryParse($UI.TxtEveryoneElse.Text, [ref]$other) -or $other -lt 0) {
+        $UI.TxtCapsSaved.Text = ''; Set-Status "The 'any other app' cap must be a whole number of MB (0 turns it off)." $Colours.Warn; return
+    }
+    $apps = @(); $never = @()
+    foreach ($row in $Script:CapRows) {
+        if ($row.Never) { $never += $row.App }
+        $t = ([string]$row.CapMB).Trim()
+        if (-not $t) { continue }
+        $mb = 0
+        if (-not [int]::TryParse($t, [ref]$mb) -or $mb -lt 16) {
+            $UI.TxtCapsSaved.Text = ''; Set-Status "$($row.Display): the cap must be a whole number of MB, 16 or more (or blank)." $Colours.Warn; return
+        }
+        $apps += @{ name = $row.App; backgroundMB = $mb }
+    }
+    # One write, so the governor never reads half of it. Everything not shown
+    # here (grace, protected list, ...) still comes from the defaults.
+    Set-ModKitUserSetting -ModId '3dxgc' -Path 'leakWatch.capApps' -Value @{
+        enabled           = [bool]$UI.ChkCapsOn.IsChecked
+        keepFreeGB        = $keep
+        keepFreePercent   = 0
+        everyoneElseMB    = $other
+        spareWhilePlaying = [bool]$UI.ChkSpareCalls.IsChecked
+        apps              = $apps
+        never             = $never
+    }
+    $UI.TxtCapsSaved.Text = 'Saved - applies within 15 seconds.'
+    Set-Status 'Caps saved.' $Colours.Good
+    Add-LogLine "[Info] caps saved: keep $keep GB free, $($apps.Count) app caps, $($never.Count) never capped"
 }
 
 # ---------------------------------------------------------------------------
@@ -929,6 +1089,20 @@ $UI.BtnGovernor.Add_Click({
 })
 
 $UI.BtnValidate.Add_Click({ Update-ModList; Set-Status 'Revalidated all mods.' $Colours.Good })
+
+$UI.BtnCapsSave.Add_Click({ Save-CapsTab })
+$UI.BtnCapsRefresh.Add_Click({ Update-CapsTab })
+$UI.BtnCapsDefaults.Add_Click({
+    Set-ModKitUserSetting -ModId '3dxgc' -Path 'leakWatch.capApps' -Value $null
+    Update-CapsTab
+    $UI.TxtCapsSaved.Text = 'Back to defaults - applies within 15 seconds.'
+})
+# Fill the tab when you open it (SelectionChanged also bubbles up from the
+# combo boxes inside tabs - only the tab strip's own change counts).
+$UI.Tabs.Add_SelectionChanged({
+    param($evtSender, $e)
+    if ($e.OriginalSource -eq $UI.Tabs -and $UI.Tabs.SelectedItem -eq $UI.TabCaps) { try { Update-CapsTab } catch { Add-LogLine "[Error] caps tab: $($_.Exception.Message)" } }
+})
 $UI.BtnOpenMods.Add_Click({ Open-Path (Join-Path $ModKitRoot 'mods') })
 
 $runtimeHelp = @'

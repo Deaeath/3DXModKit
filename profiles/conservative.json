@@ -20,7 +20,7 @@
         "enabled": false
       },
       "leakWatch": {
-        "trimApps":     { "enabled": false },
+        "capApps":      { "enabled": false },
         "askToRestart": { "enabled": false }
       }
     }

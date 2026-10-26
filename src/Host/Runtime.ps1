@@ -225,6 +225,26 @@ function Restart-ModKitService {
     return $r
 }
 
+function Clear-ModKitCaps {
+    <#
+    .SYNOPSIS
+        Lifts every hard RAM ceiling and restores normal memory priority on
+        the processes that have one. Run when the governor stops, so nothing
+        stays capped after 3dxGC is gone - including when it was killed.
+    #>
+    [CmdletBinding()]
+    param()
+    $n = 0
+    foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
+        if ([ThreeDX.ModKit.Native.MemOps]::IsCapped($p.Id)) {
+            [void][ThreeDX.ModKit.Native.MemOps]::UncapProcess($p.Id)
+            [void][ThreeDX.ModKit.Native.MemOps]::SetMemoryPriority($p.Id, [ThreeDX.ModKit.Native.MemOps]::MemoryPriorityNormal)
+            $n++
+        }
+    }
+    return $n
+}
+
 # ---------------------------------------------------------------------------
 # Mod context (capability-gated)
 # ---------------------------------------------------------------------------
@@ -246,7 +266,10 @@ function New-ModKitContext {
         [Parameter(Mandatory)][psobject]$Bus,
         [Parameter(Mandatory)][psobject]$Logger,
         # Not named -Host: that collides with PowerShell's automatic $Host.
-        [Parameter(Mandatory)][psobject]$HostObject
+        [Parameter(Mandatory)][psobject]$HostObject,
+        # The profile's block for this mod, kept so ReloadConfig can rebuild
+        # the same layers.
+        [AllowNull()][hashtable]$ProfileConfig = $null
     )
 
     $caps = @($Manifest.Capabilities)
@@ -281,6 +304,15 @@ function New-ModKitContext {
     $ctx | Add-Member -MemberType ScriptMethod -Name LogDebug -Value {
         param([string]$Message) $this._log.Debug($this.ModId, $Message)
     }
+    $ctx | Add-Member -MemberType NoteProperty -Name _manifest -Value $Manifest
+    $ctx | Add-Member -MemberType NoteProperty -Name _profileConfig -Value $ProfileConfig
+    $ctx | Add-Member -MemberType ScriptMethod -Name ReloadConfig -Value {
+        # The same layers read fresh (defaults < profile < config\<mod-id>.json),
+        # so a setting changed from the control panel applies without a restart.
+        # $null when a file is mid-write or invalid - keep what you had.
+        try { return Get-ModKitModConfig -Manifest $this._manifest -ConfigRoot $this._host.ConfigRoot -ProfileConfig $this._profileConfig }
+        catch { return $null }
+    }
 
     # --- process.query ----------------------------------------------------
     if ($caps -contains 'process.query') {
@@ -312,6 +344,9 @@ function New-ModKitContext {
                 if ($p.Path) { return (Split-Path -Parent $p.Path) }
             } catch { }
             return $null
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetForegroundPid -Value {
+            return [ThreeDX.ModKit.Native.MemOps]::GetForegroundPid()
         }
         $ctx | Add-Member -MemberType ScriptMethod -Name GetForegroundProcessName -Value {
             $fg = [ThreeDX.ModKit.Native.MemOps]::GetForegroundPid()
@@ -439,6 +474,47 @@ function New-ModKitContext {
                 }
             }
             return $a
+        }
+    }
+
+    # --- memory.cap -------------------------------------------------------
+    # Hard RAM ceilings and low memory priority for other apps. Windows
+    # enforces a ceiling continuously - past it the app pages against itself,
+    # it never gets more. Never the game, never 3dxGC itself.
+    if ($caps -contains 'memory.cap') {
+        $ctx | Add-Member -MemberType NoteProperty -Name _ownPids -Value @(
+            $PID, (Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -OperationTimeoutSec 10 -ErrorAction SilentlyContinue).ParentProcessId)
+        $ctx | Add-Member -MemberType ScriptMethod -Name CapProcess -Value {
+            param([int]$ProcessId, [long]$MaxBytes)
+            if ($ProcessId -eq $this._host.GamePid -or $this._ownPids -contains $ProcessId) { return $null }
+            return [ThreeDX.ModKit.Native.MemOps]::CapProcess($ProcessId, $MaxBytes)
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name UncapProcess -Value {
+            param([int]$ProcessId)
+            return [ThreeDX.ModKit.Native.MemOps]::UncapProcess($ProcessId)
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name SetMemoryPriority -Value {
+            param([int]$ProcessId, [int]$Priority)
+            if ($ProcessId -eq $this._host.GamePid -or $this._ownPids -contains $ProcessId) { return $false }
+            return [ThreeDX.ModKit.Native.MemOps]::SetMemoryPriority($ProcessId, $Priority)
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name ReleaseAllCaps -Value {
+            return Clear-ModKitCaps
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetSessionProcesses -Value {
+            # Every process in your desktop session, with its parent - what
+            # capping chooses from. Services in session 0 are never touched.
+            $session = (Get-Process -Id $PID).SessionId
+            $ws = @{}
+            foreach ($p in Get-Process -ErrorAction SilentlyContinue) { if ($p.SessionId -eq $session) { $ws[$p.Id] = $p.WorkingSet64 } }
+            return @(Get-CimInstance Win32_Process -OperationTimeoutSec 10 -ErrorAction SilentlyContinue | Where-Object { $ws.ContainsKey([int]$_.ProcessId) } | ForEach-Object {
+                [pscustomobject]@{
+                    Id         = [int]$_.ProcessId
+                    ParentId   = [int]$_.ParentProcessId
+                    Name       = [IO.Path]::GetFileNameWithoutExtension($_.Name)
+                    WorkingSet = $ws[[int]$_.ProcessId]
+                }
+            })
         }
     }
 

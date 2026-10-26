@@ -20,6 +20,7 @@ $Script:ModKitCapabilities = @{
     'process.priority'      = 'Adjust process priority / affinity'
     'memory.trim.self'      = 'Trim the working set of the game process (unprivileged)'
     'memory.trim.system'    = 'System-wide standby/modified-list purges (requires admin)'
+    'memory.cap'            = 'Hard RAM ceilings and low memory priority for other apps in your session (never the game, never 3dxGC itself)'
     'memory.diagnose'       = 'Find leaks: kernel pool counters, process and service growth, and whether an app is in use (front window, sound, mic, camera); may start a few short whoami.exe processes as a leak test. Never closes or restarts anything'
     'fs.read.gamedata'      = 'Read game install + LocalLow data directories'
     'fs.write.config'       = 'Write within the modkit config directory only'

@@ -178,6 +178,14 @@ namespace ThreeDX.ModKit.Native
         private const int ProcPoolTag = 0x636F7250;            // 'Proc', little-endian
         private const uint STILL_ACTIVE = 259;
 
+        private const uint QUOTA_LIMITS_HARDWS_MIN_DISABLE = 0x2;
+        private const uint QUOTA_LIMITS_HARDWS_MAX_ENABLE = 0x4;
+        private const uint QUOTA_LIMITS_HARDWS_MAX_DISABLE = 0x8;
+        private const uint PROCESS_SET_INFORMATION = 0x0200;
+        private const int ProcessMemoryPriority = 0;
+        public const int MemoryPriorityLow = 2;
+        public const int MemoryPriorityNormal = 5;
+
         // SYSTEM_MEMORY_LIST_COMMAND
         private const int MemoryEmptyWorkingSets = 2;
         private const int MemoryFlushModifiedList = 3;
@@ -205,6 +213,18 @@ namespace ThreeDX.ModKit.Native
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetProcessWorkingSetSizeEx(IntPtr hProcess, IntPtr min, IntPtr max, uint flags);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetProcessWorkingSetSizeEx(IntPtr hProcess, out IntPtr min, out IntPtr max, out uint flags);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetProcessInformation(IntPtr hProcess, int infoClass, ref uint info, uint size);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -475,6 +495,97 @@ namespace ThreeDX.ModKit.Native
                 CloseHandle(h);
             }
             return held;
+        }
+
+        #endregion
+
+        #region Caps
+
+        /// <summary>
+        /// Hard RAM ceiling for one process. Windows keeps its working set at or
+        /// under <paramref name="maxBytes"/> from then on, evicting its own pages
+        /// as it touches new ones - a trim it can't undo by pulling memory back.
+        /// Its allocations are untouched: past the cap it slows down, it never
+        /// fails an allocation. Unprivileged for processes you own.
+        /// </summary>
+        public static MemOpResult CapProcess(int pid, long maxBytes)
+        {
+            var r = new MemOpResult("CapProcess:" + pid);
+            IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA, false, pid);
+            if (h == IntPtr.Zero)
+            {
+                r.Error = "OpenProcess failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return r;
+            }
+            try
+            {
+                long min = Math.Min(1L << 20, maxBytes / 2);
+                if (!SetProcessWorkingSetSizeEx(h, new IntPtr(min), new IntPtr(maxBytes),
+                                                QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_ENABLE))
+                    r.Error = "SetProcessWorkingSetSizeEx failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                else { r.Success = true; r.AffectedProcesses = 1; }
+            }
+            finally { CloseHandle(h); }
+            return r;
+        }
+
+        /// <summary>Lifts a hard RAM ceiling. Harmless on a process without one.</summary>
+        public static MemOpResult UncapProcess(int pid)
+        {
+            var r = new MemOpResult("UncapProcess:" + pid);
+            IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA, false, pid);
+            if (h == IntPtr.Zero)
+            {
+                r.Error = "OpenProcess failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return r;
+            }
+            try
+            {
+                IntPtr min, max; uint flags;
+                if (!GetProcessWorkingSetSizeEx(h, out min, out max, out flags))
+                    r.Error = "GetProcessWorkingSetSizeEx failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                else if (!SetProcessWorkingSetSizeEx(h, min, max, QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE))
+                    r.Error = "SetProcessWorkingSetSizeEx failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                else { r.Success = true; r.AffectedProcesses = 1; }
+            }
+            finally { CloseHandle(h); }
+            return r;
+        }
+
+        /// <summary>True when the process has a hard RAM ceiling.</summary>
+        public static bool IsCapped(int pid)
+        {
+            return GetCapBytes(pid) > 0;
+        }
+
+        /// <summary>The process's hard RAM ceiling in bytes, or 0 when it has none.</summary>
+        public static long GetCapBytes(int pid)
+        {
+            IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (h == IntPtr.Zero) return 0;
+            try
+            {
+                IntPtr min, max; uint flags;
+                if (!GetProcessWorkingSetSizeEx(h, out min, out max, out flags)) return 0;
+                return (flags & QUOTA_LIMITS_HARDWS_MAX_ENABLE) != 0 ? max.ToInt64() : 0;
+            }
+            finally { CloseHandle(h); }
+        }
+
+        /// <summary>
+        /// Memory priority, 1 (very low) to 5 (normal). When something needs RAM,
+        /// Windows takes it from low-priority processes' pages first.
+        /// </summary>
+        public static bool SetMemoryPriority(int pid, int priority)
+        {
+            IntPtr h = OpenProcess(PROCESS_SET_INFORMATION, false, pid);
+            if (h == IntPtr.Zero) return false;
+            try
+            {
+                uint p = (uint)priority;
+                return SetProcessInformation(h, ProcessMemoryPriority, ref p, 4);
+            }
+            finally { CloseHandle(h); }
         }
 
         #endregion

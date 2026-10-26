@@ -127,6 +127,16 @@
       <Setter Property="Margin" Value="0,4"/>
     </Style>
 
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{StaticResource PanelAlt}"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="CaretBrush" Value="{StaticResource Text}"/>
+      <Setter Property="Padding" Value="5,3"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
   </Window.Resources>
 
   <Grid>
@@ -397,6 +407,87 @@
       </TabItem>
 
       <!-- LOGS -->
+      <TabItem Header="Caps" x:Name="TabCaps">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <!-- the global part: how much RAM to keep free, and for everything unlisted -->
+          <Border Grid.Row="0" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12" Margin="0,0,0,9">
+            <StackPanel>
+              <TextBlock Text="RAM caps for background apps" Style="{StaticResource H2}"/>
+              <WrapPanel>
+                <CheckBox x:Name="ChkCapsOn" Content="Cap background apps" VerticalAlignment="Center" Margin="0,4,22,4"/>
+                <TextBlock Text="Always keep" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="0,0,6,0"/>
+                <TextBox x:Name="TxtKeepFree" Width="52"/>
+                <TextBlock Text="GB of RAM free" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="6,0,22,0"/>
+                <TextBlock Text="Any other app over" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="0,0,6,0"/>
+                <TextBox x:Name="TxtEveryoneElse" Width="60"/>
+                <TextBlock Text="MB gets capped there" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="6,0,22,0"/>
+                <CheckBox x:Name="ChkSpareCalls" Content="Spare apps on a call or playing sound" VerticalAlignment="Center"/>
+              </WrapPanel>
+              <TextBlock x:Name="TxtCapsSummary" Foreground="{StaticResource TextDim}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+          </Border>
+
+          <!-- per app -->
+          <Border Grid.Row="1" Background="{StaticResource Panel}" CornerRadius="6" Padding="15,12">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Grid Grid.Row="0" Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="190"/>
+                  <ColumnDefinition Width="100"/>
+                  <ColumnDefinition Width="120"/>
+                  <ColumnDefinition Width="80"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="APP" Style="{StaticResource Label}"/>
+                <TextBlock Grid.Column="1" Text="USING NOW" Style="{StaticResource Label}"/>
+                <TextBlock Grid.Column="2" Text="CAP (MB)" Style="{StaticResource Label}" ToolTip="Blank: the 'any other app' cap above"/>
+                <TextBlock Grid.Column="3" Text="NEVER CAP" Style="{StaticResource Label}"/>
+                <TextBlock Grid.Column="4" Text="RIGHT NOW" Style="{StaticResource Label}"/>
+              </Grid>
+              <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="LstCaps">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Grid Margin="0,2">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="190"/>
+                          <ColumnDefinition Width="100"/>
+                          <ColumnDefinition Width="120"/>
+                          <ColumnDefinition Width="80"/>
+                          <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding Display}" FontSize="12" VerticalAlignment="Center" ToolTip="{Binding App}"/>
+                        <TextBlock Grid.Column="1" Text="{Binding UsingText}" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="2" Text="{Binding CapMB, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
+                        <CheckBox Grid.Column="3" IsChecked="{Binding Never}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                        <TextBlock Grid.Column="4" Text="{Binding Status}" Foreground="#FF8B93A3" FontSize="11" VerticalAlignment="Center"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Grid>
+          </Border>
+
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,9,0,0">
+            <Button x:Name="BtnCapsSave" Style="{StaticResource Primary}" Content="Save"/>
+            <Button x:Name="BtnCapsRefresh" Content="Refresh"/>
+            <Button x:Name="BtnCapsDefaults" Content="Back to defaults"/>
+            <TextBlock x:Name="TxtCapsSaved" VerticalAlignment="Center" Foreground="#FF4ADE80" FontSize="12" Margin="6,0,0,7"/>
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
       <TabItem Header="Logs">
         <StackPanel>
           <TextBlock Text="Game log analysis" Style="{StaticResource H2}"/>
