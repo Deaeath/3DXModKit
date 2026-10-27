@@ -68,14 +68,33 @@ if (-not $haveInstance) {
     if (-not $Minimized) {
         [System.Windows.MessageBox]::Show(
             "3dxGC is already running - look for its icon in the system tray.`n`n" +
-            "To run it as administrator instead, right-click the tray icon, choose Exit 3dxGC, then open 3dxGC.bat again.",
+            "To run it as administrator instead, right-click the tray icon, choose Exit 3dxGC, then open 3dxGC again.",
             '3dxGC', 'OK', 'Information') | Out-Null
     }
     exit 0
 }
 
+# Setup and the uninstaller set this to close the panel the way its own Exit
+# does (governor stopped, caps lifted) before they touch its files. It is
+# opened to this user by name: a panel running as administrator is otherwise
+# out of reach of a setup running without it.
+$Script:ExitSignal = $null
+try {
+    $exitSec = New-Object System.Security.AccessControl.EventWaitHandleSecurity
+    $exitSec.AddAccessRule((New-Object System.Security.AccessControl.EventWaitHandleAccessRule(
+        [Security.Principal.WindowsIdentity]::GetCurrent().User, 'Synchronize, Modify', 'Allow')))
+    $exitCreated = $false
+    $Script:ExitSignal = [System.Threading.EventWaitHandle]::new($false, 'AutoReset', 'Local\3dxGC-Exit', [ref]$exitCreated, $exitSec)
+    if (-not $exitCreated) { [void]$Script:ExitSignal.Reset() }
+} catch { }
+
 $ModKitRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $ModKitRoot '3DXModKit.psm1') -Force
+
+# Same id as the installer's shortcuts, so the taskbar shows this window as
+# 3dxGC (its icon, its pin) rather than as one more PowerShell window.
+try { [void][ThreeDX.ModKit.Native.ShellIdentity]::SetAppId('Deaeath.3dxGC') } catch { }
+$Script:IconPath = Join-Path $PSScriptRoot '3dxGC.ico'
 
 $M = [ThreeDX.ModKit.Native.MemOps]
 $BrushConv = New-Object Windows.Media.BrushConverter
@@ -98,6 +117,7 @@ $Colours = @{
 [xml]$xaml = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'MainWindow.xaml') -Raw
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $win = [Windows.Markup.XamlReader]::Load($reader)
+try { $win.Icon = [Windows.Media.Imaging.BitmapFrame]::Create((New-Object Uri $Script:IconPath)) } catch { }
 
 $UI = @{}
 $xaml.SelectNodes("//*[@*[local-name()='Name']]") | ForEach-Object {
@@ -175,7 +195,9 @@ function Test-ModKitAutoStart {
 }
 
 function Enable-ModKitAutoStart {
-    $launcher = Join-Path $ModKitRoot '3dxGC.bat'
+    # 3dxGC.exe comes with the installer; a copy run from the zip has the .bat.
+    $launcher = Join-Path $ModKitRoot '3dxGC.exe'
+    if (-not (Test-Path -LiteralPath $launcher)) { $launcher = Join-Path $ModKitRoot '3dxGC.bat' }
     New-ItemProperty -Path $Script:AutoStartRunKey -Name $Script:AutoStartValue `
         -Value ('"' + $launcher + '" -Minimized') -PropertyType String -Force | Out-Null
 }
@@ -746,6 +768,12 @@ function Get-CapsSettings {
     return @{}
 }
 
+function Get-TrimSettings {
+    $s = Get-ModKitModSettings -ModId '3dxgc' -ProfileName ([string]$UI.CmbProfile.SelectedItem)
+    if ($s.leakWatch -and $s.leakWatch.trimApps) { return $s.leakWatch.trimApps }
+    return @{}
+}
+
 # name -> { WS; Cap; Capped } for this desktop session, protected ones left out.
 function Get-CapsRunning {
     param($Protect)
@@ -784,7 +812,13 @@ function Set-CapRowLive {
     $s = $null
     if ($Status -and $Status.apps -and $Status.apps.PSObject.Properties[$Row.App]) { $s = $Status.apps.($Row.App) }
     $Row.Status = if ($e.Capped -gt 0) {
-                      $f = if ($s -and $s.faults -ge 300) { ' - paging {0:N0}/s, getting room' -f $s.faults } else { '' }
+                      # Paging under its cap gets room; paging at the whole cap
+                      # you set is that cap being too small for what it does.
+                      $limit = 0.0
+                      if ([double]::TryParse([string]$Row.CapMB, [ref]$limit) -and $Status -and $Status.factor) { $limit *= $Status.factor }
+                      $f = if (-not $s -or $s.faults -lt 300) { '' }
+                           elseif ($limit -gt 0 -and $e.Cap / 1MB -ge 0.9 * $limit) { ' - paging {0:N0}/s at your cap: raise it to stop that' -f $s.faults }
+                           else { ' - paging {0:N0}/s, getting room' -f $s.faults }
                       'capped at {0:N0} MB{1}' -f ($e.Cap / 1MB), $f
                   }
                   elseif ($Row.Never) { 'never capped' }
@@ -811,7 +845,7 @@ function Update-CapsSummary {
             " Above your {0} GB target - caps at their full allowance." -f $Status.targetGB
         }
     }
-    $line += " Each app's cap settles at what it actually uses: one paging hard against its cap gets room (squeezing it frees nothing), one sitting quietly gets pushed lower. The app in front (and everything it started), the game, 3dxGC and Windows' display, input and audio pieces are never capped."
+    $line += " Each app's cap settles at what it actually uses: one paging hard against its cap gets room (squeezing it frees nothing), one sitting quietly gets pushed lower. Apps you've left are also trimmed, so what they aren't using goes back to free RAM at once, and they're trimmed again as they grow. The app in front (and everything it started), the game, 3dxGC and Windows' display, input and audio pieces are never capped or trimmed."
     $UI.TxtCapsSummary.Text = $line
 }
 
@@ -823,6 +857,8 @@ function Update-CapsTab {
                                   elseif ($ca.keepFreePercent -gt 0) { [string][math]::Round($M::GetSystemMemory().TotalPhysGB * $ca.keepFreePercent / 100) }
                                   else { '0' }
     $UI.TxtEveryoneElse.Text    = [string]$ca.everyoneElseMB
+    $ta = Get-TrimSettings
+    $UI.TxtTrimAfter.Text       = if ($ta.enabled) { [string]$ta.afterSeconds } else { '0' }
     $UI.ChkSpareCalls.IsChecked = [bool]$ca.spareWhilePlaying
     $UI.TxtCapsSaved.Text       = ''
 
@@ -867,6 +903,10 @@ function Save-CapsTab {
     if (-not [int]::TryParse($UI.TxtEveryoneElse.Text, [ref]$other) -or $other -lt 0) {
         $UI.TxtCapsSaved.Text = ''; Set-Status "The 'any other app' cap must be a whole number of MB (0 turns it off)." $Colours.Warn; return
     }
+    $trimAfter = 0
+    if (-not [int]::TryParse($UI.TxtTrimAfter.Text, [ref]$trimAfter) -or $trimAfter -lt 0) {
+        $UI.TxtCapsSaved.Text = ''; Set-Status "Trim apps after must be a whole number of seconds (0 turns it off)." $Colours.Warn; return
+    }
     $apps = @(); $never = @()
     foreach ($row in $Script:CapRows) {
         if ($row.Never) { $never += $row.App }
@@ -889,9 +929,14 @@ function Save-CapsTab {
         apps              = $apps
         never             = $never
     }
+    Set-ModKitUserSetting -ModId '3dxgc' -Path 'leakWatch.trimApps' -Value @{
+        enabled      = $trimAfter -gt 0
+        afterSeconds = $(if ($trimAfter -gt 0) { $trimAfter } else { 30 })
+    }
     $UI.TxtCapsSaved.Text = 'Saved - applies within 15 seconds.'
     Set-Status 'Caps saved.' $Colours.Good
-    Add-LogLine "[Info] caps saved: keep $keep GB free, $($apps.Count) app caps, $($never.Count) never capped"
+    $trimNote = if ($trimAfter -gt 0) { "apps trimmed ${trimAfter}s after you leave them" } else { 'trimming apps you leave off' }
+    Add-LogLine "[Info] caps saved: keep $keep GB free, $($apps.Count) app caps, $($never.Count) never capped, $trimNote"
 }
 
 # ---------------------------------------------------------------------------
@@ -1127,6 +1172,7 @@ $UI.BtnCapsSave.Add_Click({ Save-CapsTab })
 $UI.BtnCapsRefresh.Add_Click({ Update-CapsTab })
 $UI.BtnCapsDefaults.Add_Click({
     Set-ModKitUserSetting -ModId '3dxgc' -Path 'leakWatch.capApps' -Value $null
+    Set-ModKitUserSetting -ModId '3dxgc' -Path 'leakWatch.trimApps' -Value $null
     Update-CapsTab
     $UI.TxtCapsSaved.Text = 'Back to defaults - applies within 15 seconds.'
 })
@@ -1251,9 +1297,13 @@ $UI.BtnRepair.Add_Click({      Invoke-ToolkitScript 'maintenance\Repair-Installa
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 try {
-    $tray.Icon = [Drawing.Icon]::ExtractAssociatedIcon((Get-Process -Id $PID).Path)
+    $tray.Icon = New-Object Drawing.Icon($Script:IconPath, [Windows.Forms.SystemInformation]::SmallIconSize)
 } catch {
-    $tray.Icon = [System.Drawing.SystemIcons]::Application
+    try {
+        $tray.Icon = [Drawing.Icon]::ExtractAssociatedIcon((Get-Process -Id $PID).Path)
+    } catch {
+        $tray.Icon = [System.Drawing.SystemIcons]::Application
+    }
 }
 $tray.Text = '3dxGC'
 $tray.Visible = $true
@@ -1350,7 +1400,10 @@ $win.Dispatcher.add_UnhandledException({
 
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromSeconds(2)
-$timer.Add_Tick({ try { Update-Telemetry } catch { } })
+$timer.Add_Tick({
+    if ($Script:ExitSignal -and $Script:ExitSignal.WaitOne(0)) { $win.Close(); return }
+    try { Update-Telemetry } catch { }
+})
 $timer.Start()
 
 Update-ModList

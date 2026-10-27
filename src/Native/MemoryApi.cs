@@ -600,7 +600,11 @@ namespace ThreeDX.ModKit.Native
             return r;
         }
 
-        /// <summary>Lifts a hard RAM ceiling. Harmless on a process without one.</summary>
+        /// <summary>
+        /// Lifts a hard RAM ceiling. Does nothing to a process without one:
+        /// re-setting its default limits (a 1.4 MB soft maximum) would trim it
+        /// to nearly nothing.
+        /// </summary>
         public static MemOpResult UncapProcess(int pid)
         {
             var r = new MemOpResult("UncapProcess:" + pid);
@@ -615,6 +619,8 @@ namespace ThreeDX.ModKit.Native
                 IntPtr min, max; uint flags;
                 if (!GetProcessWorkingSetSizeEx(h, out min, out max, out flags))
                     r.Error = "GetProcessWorkingSetSizeEx failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                else if ((flags & QUOTA_LIMITS_HARDWS_MAX_ENABLE) == 0)
+                    r.Success = true;
                 else if (!SetProcessWorkingSetSizeEx(h, min, max, QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE))
                     r.Error = "SetProcessWorkingSetSizeEx failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message;
                 else { r.Success = true; r.AffectedProcesses = 1; }
@@ -956,6 +962,26 @@ namespace ThreeDX.ModKit.Native
             var result = new int[pids.Count];
             pids.CopyTo(result);
             return result;
+        }
+    }
+
+    #endregion
+
+    #region Shell identity
+
+    // The control panel is a PowerShell window, so by default the taskbar
+    // groups it with every other PowerShell window and pins powershell.exe.
+    // Given the AppUserModelID the installer puts on 3dxGC's shortcuts, its
+    // button shows 3dxGC's icon and pinning it pins 3dxGC. Must be set before
+    // the process shows its first window.
+    public static class ShellIdentity
+    {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
+        public static bool SetAppId(string appId)
+        {
+            return SetCurrentProcessExplicitAppUserModelID(appId) == 0;
         }
     }
 

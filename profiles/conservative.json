@@ -21,6 +21,7 @@
       },
       "leakWatch": {
         "capApps":      { "enabled": false },
+        "trimApps":     { "enabled": false },
         "askToRestart": { "enabled": false }
       }
     }

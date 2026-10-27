@@ -427,6 +427,9 @@
                 <TextBlock Text="Any other app over" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="0,0,6,0"/>
                 <TextBox x:Name="TxtEveryoneElse" Width="60"/>
                 <TextBlock Text="MB gets capped there" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="6,0,22,0"/>
+                <TextBlock Text="Trim apps" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="0,0,6,0"/>
+                <TextBox x:Name="TxtTrimAfter" Width="44"/>
+                <TextBlock Text="s after you leave them (0 = off)" VerticalAlignment="Center" Foreground="{StaticResource TextDim}" FontSize="12" Margin="6,0,22,0"/>
                 <CheckBox x:Name="ChkSpareCalls" Content="Spare apps on a call or playing sound" VerticalAlignment="Center"/>
               </WrapPanel>
               <TextBlock x:Name="TxtCapsSummary" Foreground="{StaticResource TextDim}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>

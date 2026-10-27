@@ -22,7 +22,8 @@
         "enabled": true,
         "onlyWhenCritical": false,
         "emptySystemWorkingSet": true,
-        "minSecondsBetweenPurges": 120
+        "minSecondsBetweenPurges": 120,
+        "whenIdle": { "idleSeconds": 60, "everyMinutes": 5 }
       },
       "safety": {
         "neverTrimWhenForeground": false

@@ -13,3 +13,7 @@
 
 *.png   binary
 *.dll   binary
+*.ico   binary
+
+# Build tooling stays out of release archives.
+build/  export-ignore

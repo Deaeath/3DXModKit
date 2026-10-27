@@ -24,7 +24,10 @@
     "purgeLowPriorityStandby": true,
     "flushModifiedList": true,
     "emptySystemWorkingSet": false,
-    "minSecondsBetweenPurges": 300
+    "minSecondsBetweenPurges": 300,
+    "whenIdle": { "enabled": true, "idleSeconds": 180, "everyMinutes": 10,
+                  "emptyWorkingSets": true, "emptySystemWorkingSet": true, "flushModifiedList": true,
+                  "purgeLowPriorityStandby": true, "purgeStandby": false }
   },
 
   "leakWatch": {
@@ -57,6 +60,7 @@
                        "protect": ["3DXChat", "3DXLauncher", "dwm", "csrss", "winlogon", "sihost", "ctfmon", "fontdrvhost", "audiodg",
                                    "Memory Compression", "StartMenuExperienceHost", "ShellExperienceHost", "SearchHost", "TextInputHost",
                                    "LockApp", "Taskmgr", "SteelSeries*", "conhost"] },
+    "trimApps":      { "enabled": true, "afterSeconds": 30, "againAfterMB": 64, "aboveMB": 32, "maxWaitMinutes": 30 },
     "askToRestart":  { "enabled": true, "everyMinutes": 1440, "notInFirstMinutes": 30, "whenFreeBelowPercent": 15, "whenCommitAbovePercent": 90,
                        "apps": [
                          { "name": "explorer",      "aboveMB": 1500 },

@@ -84,12 +84,15 @@ Sometimes the RAM is gone and the game isn't what's holding it. 3dxGC's **leak w
   - **Each cap settles at what the app actually uses.** A cap below an app's active memory frees nothing — its pages just bounce through the standby list, which Windows already counts as free — and burns CPU on page faults. So 3dxGC watches each capped process: one paging hard against its cap gets room, one sitting quietly at its cap is pushed a step lower to see whether idle memory goes with it. Your cap is the ceiling; the app gets less whenever it can live with less. On a test app holding 400 MB but using 100, the cap walked down and it settled at about 100 MB with no paging.
   - **Always keep X GB free.** While free RAM is under your target, every allowance tightens a step at a time — but only while that frees RAM. When a step frees nothing (what's left is the game, Windows, drivers and apps' active memory) it holds, and when capped apps start paging heavily it backs off, because squeezing past that point costs CPU and frees nothing. Once there's room again caps relax. The default keeps a quarter of your RAM free.
   - **Per app, from the control panel's Caps tab.** Every app over 100 MB is listed with what it's using now and exactly what's happening to it — capped (and at what), in front, just left, on a call, or under the line. Set its cap in MB, leave it blank for the "any other app" cap, or tick **Never cap**. Save applies within 15 seconds — the governor re-reads caps on every pass, nothing restarts. Your settings live in `config\3dxgc.json`, which updates never touch.
+  - **An app's processes share its cap by what each needs.** A busy browser tab takes room from idle ones instead of paging at a fixed slice.
   - **Calls and sound** are spared by default (a capped app mid-call can crackle); untick that to cap everything regardless.
   - Every cap is lifted when the governor stops — including when the control panel stops it.
+- **Apps you've left give back what they aren't using.** 30 seconds after an app leaves the front, 3dxGC trims it. Its idle pages go to the standby list, so free RAM goes up at once, and anything the app touches again comes straight back from RAM. It's trimmed again each time it grows back by 64 MB. An app that takes a trim straight back is using that memory, so it's left twice as long each time, up to half an hour. Set the delay (0 turns it off) on the Caps tab. The trim frees what an app isn't using right away; the cap stops it growing back past its limit.
+- **While you're away** (3 minutes without input, then every 10 minutes while you stay away), 3dxGC does what RAMMap's Empty menu does, except empty the standby list: every working set, Windows' file cache, the modified list written out, the lowest-priority cache. Emptying standby is left out on purpose. Standby already counts as free (it's part of Task Manager's *Available*), so emptying it frees nothing more; it only throws away the cached copies, and whatever is needed again then comes from disk instead of RAM. It still runs under real memory pressure, and `systemWide.whenIdle.purgeStandby` adds it to the idle sweep too. The game is left alone while it's on screen. Needs administrator.
 - **Asking, never doing.** 3dxGC never restarts an app, a service or Windows by itself. When an app in `leakWatch.askToRestart` grows past its line (default: Explorer above 1.5 GB, Discord above 3 GB), or a service there leaks handles (default: `ArmouryCrateService` above 50,000), 3dxGC's prompt card appears in the bottom-right corner — *"Restart Discord? Discord has grown to 3,200 MB of memory…"* — with **Restart** and **Not now**. Press Restart and the control panel restarts it the way it was started (Discord through its own updater, Explorer with its folder windows reopened; a service through Windows' administrator prompt). **Not now** leaves it running and doesn't ask about it again for three days; **Don't ask again** means never for that app; a minute without an answer leaves it running too. The card is 3dxGC's own window rather than a Windows notification, so Do Not Disturb, game mode and full-screen apps can't hide it, and it never takes focus — the game keeps your keyboard and mouse. Because trimming already takes an app's RAM back, it only asks about an app when that isn't enough (free RAM under 15% or Windows' memory commitments over 90%), at most once a day per app, never in the first half hour after 3dxGC starts, and never while the app is on a call. What it asked and what you snoozed are kept in `config\3dxgc.state.json`, so restarting 3dxGC doesn't start asking all over again. No mod can restart anything — only pressing Restart can.
 - **Rival optimisers.** If another memory optimiser runs alongside 3dxGC, they fight, so 3dxGC tells you to close one.
 
-Trimming apps and asking are both off in the conservative profile.
+Caps, trimming apps you've left, the idle sweep and asking are all off in the conservative profile.
 
 While the kernel is holding more than 4 GB, the RAM-amount trigger stops trimming the game in the foreground. The shortage isn't the game's, and trimming it would only cause stutter.
 
@@ -97,15 +100,21 @@ While the kernel is holding more than 4 GB, the RAM-amount trigger stops trimmin
 
 ## Install
 
-**[Download the latest release](https://github.com/Deaeath/3DXModKit/releases/latest)**, extract the folder anywhere, and double-click:
+**[Download `3dxGC-Setup`](https://github.com/Deaeath/3DXModKit/releases/latest)** and run it. It installs for your Windows account only, so installing needs no administrator, and you get:
 
-```
-3dxGC.bat
-```
+- **3dxGC in the Start menu**, and on the desktop if you want it, with its own icon on the taskbar.
+- **Start with Windows**, on by default, so it's in the system tray from the moment you sign in.
+- **An entry in Settings > Apps > Installed apps**, so it uninstalls like any other app. The uninstaller asks whether to keep your settings.
 
-That is the whole install. No setup, no dependencies, no build step — Windows PowerShell 5.1 ships with Windows and is all the host tier needs.
+Already running 3dxGC from the zip? Exit it from its tray icon first. Setup brings your settings over (caps, keep-free target, profile) and points Start with Windows at the new copy. You can delete the old folder afterwards.
 
-The launcher asks for administrator once, because four of the five RAMMap-equivalent operations need it. **Decline and it still runs** — per-process trimming needs no privileges; you just lose the system-wide purges.
+3dxGC asks for administrator each time it opens, because four of the five RAMMap-equivalent operations need it. **Decline and it still runs.** Per-process trimming and caps need no privileges; you just lose the system-wide purges.
+
+> The installer isn't code-signed, so Windows may say *"Windows protected your PC"* the first time. Click **More info**, then **Run anyway**. Each release's `SHA256SUMS.txt` lists the checksum of every download.
+
+### Without installing
+
+Each release also has `3DXModKit-vX.zip`. Extract the folder anywhere and double-click `3dxGC.exe`. Nothing else to set up: Windows PowerShell 5.1 ships with Windows and is all the host tier needs.
 
 > Extract the folder before running. Launching from inside the .zip leaves Windows' temp copy without the `gui\` and `src\` folders, and the launcher will tell you so.
 
@@ -247,7 +256,7 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 
 ```
 3DXModKit/
-├── 3dxGC.bat                     double-click launcher (self-elevating)
+├── 3dxGC.bat                     double-click launcher (self-elevating); releases add 3dxGC.exe
 ├── modkit.ps1                    CLI
 ├── 3DXModKit.psm1                module entry point
 ├── gui/
@@ -269,8 +278,11 @@ See [docs/WRITING-MODS.md](docs/WRITING-MODS.md). The short version — a mod is
 │   ├── bootstrap/                BepInEx install / build / uninstall
 │   └── src/ModKit.Runtime/       BepInEx 6 IL2CPP plugin
 ├── profiles/                     modpack definitions
+├── build/                        release build: installer script, launcher source, icon
 └── logs/
 ```
+
+To build a release, run `.\build\Build-Release.ps1`. It needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) and writes the zip, the installer and `SHA256SUMS.txt` to `dist\`.
 
 ---
 

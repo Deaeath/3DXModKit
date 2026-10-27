@@ -191,6 +191,9 @@ function Set-ModKitUserSetting {
         $node = $node[$keys[$i]]
     }
     if ($null -eq $Value) { $node.Remove($keys[-1]) } else { $node[$keys[-1]] = $Value }
+    # A fresh install has no config\ until something is first saved.
+    $dir = Split-Path -Parent $file
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $all | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $file -Encoding UTF8
 }
 

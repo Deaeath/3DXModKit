@@ -11,6 +11,9 @@
 # So the governor trims when the game is *not* the thing you are looking at
 # (backgrounded, minimised, desktop idle), and escalates to system-wide purges
 # only when free memory is genuinely scarce. Every action is rate-limited.
+# Other apps are trimmed once you've left them and capped while they stay in
+# the background, and while you're away the whole PC is swept - everything
+# but the standby list, which already counts as free.
 #
 # Client-side only: this mod reads process counters and calls memory-management
 # APIs. It never opens a handle for VM_WRITE, never touches game files, and
@@ -59,6 +62,10 @@
             SqueezedOnce     = $false
             HoldLoggedAt     = [datetime]::MinValue
             DiskWarnedAt     = [datetime]::MinValue
+            TrimAway         = @{}   # pid -> when it was first seen out of the front
+            Trim             = @{}   # pid -> { At; To; Took; Wait } of its last trim
+            TrimmedAt        = @{}   # pid -> when it was last trimmed, so its refaults aren't read as paging against a cap
+            LastIdleSweepAt  = [datetime]::MinValue
             LastFrontPid     = 0
             LastGameTrim     = $null # { BeforeMB; AfterMB } of the game's last trim
             PeriodicSeconds  = 0     # current periodic interval, stretched while trims don't stick
@@ -416,26 +423,18 @@
         # use), and backs off when capped apps churn. Settings are re-read on
         # every pass, so the control panel's Caps tab applies without a restart.
 
-        $capPass = {
-            $fresh = $ctx.ReloadConfig()
-            if ($fresh -and $fresh.leakWatch -and $fresh.leakWatch.capApps) { $cfg.leakWatch.capApps = $fresh.leakWatch.capApps }
-            $ca = $cfg.leakWatch.capApps
-            if (-not $ca -or -not $ca.enabled) {
-                if ($state.Caps.Count -gt 0) {
-                    [void]$ctx.ReleaseAllCaps(); $state.Caps.Clear(); $state.Learned.Clear()
-                    $ctx.Log('caps off - every cap lifted')
-                }
-                $ctx.WriteStatus(@{ at = (Get-Date).ToString('o'); enabled = $false })
-                return
-            }
+        # One look at your session per pass, shared by caps and trims: every
+        # process, how fast each is page-faulting since the last pass, and
+        # which are the app in front - every process with its name and all
+        # they started, except when that's the shell, which started nearly
+        # everything.
+        $scanSession = {
             $now   = Get-Date
             $procs = @($ctx.GetSessionProcesses())
-            if ($procs.Count -eq 0) { return }
+            if ($procs.Count -eq 0) { return $null }
             $byId = @{}
             foreach ($p in $procs) { $byId[$p.Id] = $p }
 
-            # Faults per second since the last pass: how hard each process is
-            # paging against its cap.
             $rate = @{}
             $dt = ($now - $state.FaultsAt).TotalSeconds
             if ($dt -gt 0 -and $dt -lt 300) {
@@ -446,11 +445,7 @@
             $state.Faults.Clear()
             foreach ($p in $procs) { $state.Faults[$p.Id] = $p.PageFaults }
             $state.FaultsAt = $now
-            $churn = 0.0
-            foreach ($id in $state.Caps.Keys) { if ($rate.ContainsKey($id) -and $rate[$id] -gt 0) { $churn += $rate[$id] } }
 
-            # The app in front: every process with its name, and all they started -
-            # except when that's the shell, which started nearly everything.
             $frontPid  = $ctx.GetForegroundPid()
             $frontName = ($procs | Where-Object { $_.Id -eq $frontPid } | Select-Object -First 1).Name
             $withTree  = $frontName -and $frontName -ne 'explorer'
@@ -468,6 +463,34 @@
                 $front[$id] = $true
                 if ($withTree -and $children.ContainsKey($id)) { foreach ($c in $children[$id]) { $queue.Enqueue($c) } }
             }
+            return [pscustomobject]@{ At = $now; Procs = $procs; ById = $byId; Rate = $rate; Front = $front }
+        }.GetNewClosure()
+
+        $capPass = {
+            param($scan)
+            $ca = $cfg.leakWatch.capApps
+            if (-not $ca -or -not $ca.enabled) {
+                if ($state.Caps.Count -gt 0) {
+                    [void]$ctx.ReleaseAllCaps(); $state.Caps.Clear(); $state.Learned.Clear()
+                    $ctx.Log('caps off - every cap lifted')
+                }
+                $ctx.WriteStatus(@{ at = (Get-Date).ToString('o'); enabled = $false })
+                return
+            }
+            $now   = $scan.At
+            $procs = $scan.Procs
+            $byId  = $scan.ById
+            $rate  = $scan.Rate
+            $front = $scan.Front
+            $step  = if ($ca.everySeconds) { $ca.everySeconds } else { 15 }
+
+            # How hard capped processes are paging against their caps. A
+            # process just trimmed is faulting back what it uses, not paging.
+            $churn = 0.0
+            foreach ($id in $state.Caps.Keys) {
+                if ($state.TrimmedAt.ContainsKey($id) -and ($now - $state.TrimmedAt[$id]).TotalSeconds -lt $step) { continue }
+                if ($rate.ContainsKey($id) -and $rate[$id] -gt 0) { $churn += $rate[$id] }
+            }
 
             # Keep-free target. One step per interval, however often app switches
             # trigger a pass. Back off when capped apps churn; hold when the last
@@ -477,7 +500,6 @@
             $free   = $sys.AvailPhysBytes / 1GB
             $target = if ($ca.keepFreeGB -gt 0) { [double]$ca.keepFreeGB } elseif ($ca.keepFreePercent -gt 0) { $sys.TotalPhysGB * $ca.keepFreePercent / 100 } else { 0.0 }
             $was    = $state.CapFactor
-            $step   = if ($ca.everySeconds) { $ca.everySeconds } else { 15 }
             $churnLimit = if ($ca.churnLimit) { [double]$ca.churnLimit } else { 20000.0 }
             if ($target -le 0) {
                 $state.CapFactor = 1.0; $state.Holding = $false
@@ -536,9 +558,10 @@
             $wanted = @{}   # pid -> ceiling in bytes
             foreach ($name in $groups.Keys) {
                 $g = $groups[$name]
-                # Allowance per process: the app's (shared by how much each
-                # process holds), or the "any other app" one for a process over
-                # that line. Squeezed by the keep-free factor.
+                # Allowance per process: the app's (a first cap shares it by how
+                # much each process holds), or the "any other app" one for a
+                # process over that line. Squeezed by the keep-free factor.
+                $budget = 0.0
                 $allow = @{}
                 if ($budgets.ContainsKey($name)) {
                     $budget = $budgets[$name] * 1MB * $factor
@@ -561,26 +584,44 @@
                 }
                 $appState[$name] = 'capped'
 
+                # Where each ceiling wants to go: room for a process paging hard
+                # against it (squeezing it frees nothing), a step lower for one
+                # sitting quietly at it, and slowly lower for one long well under
+                # it - often one that was trimmed - so its share goes where it's
+                # used.
+                $want = @{}
                 foreach ($id in $allow.Keys) {
-                    $a  = $allow[$id]
-                    $l  = if ($state.Learned.ContainsKey($id)) { [double]$state.Learned[$id] } else { $a }
+                    $l  = if ($state.Learned.ContainsKey($id)) { [double]$state.Learned[$id] } else { $allow[$id] }
                     $ws = [double]$byId[$id].WorkingSet
                     # Judge only a ceiling that has held for a whole interval - the
-                    # first moments after a cap moves always fault, while Windows
-                    # finds out which pages are actually in use.
-                    $settled = $state.CapMovedAt.ContainsKey($id) -and ($now - $state.CapMovedAt[$id]).TotalSeconds -ge $step
-                    if ($state.Caps.ContainsKey($id) -and $rate.ContainsKey($id) -and $settled) {
+                    # first moments after a cap moves (or a trim) always fault,
+                    # while Windows finds out which pages are actually in use.
+                    $held = if ($state.CapMovedAt.ContainsKey($id)) { ($now - $state.CapMovedAt[$id]).TotalSeconds } else { 0 }
+                    if ($state.Caps.ContainsKey($id) -and $rate.ContainsKey($id) -and $held -ge $step) {
+                        $calm = -not $state.RaisedAt.ContainsKey($id) -or ($now - $state.RaisedAt[$id]).TotalSeconds -ge 60
                         if ($rate[$id] -ge $churnPer) {
-                            # Paging what it uses: room, since squeezing it frees nothing.
-                            $raised = [math]::Min($a, [math]::Max($l, $ws) * 1.5)
-                            if ($raised -gt $l) { $l = $raised; $state.RaisedAt[$id] = $now }
-                        } elseif ($rate[$id] -lt 20 -and $ws -ge 0.9 * $l -and
-                                  (-not $state.RaisedAt.ContainsKey($id) -or ($now - $state.RaisedAt[$id]).TotalSeconds -ge 60)) {
-                            # Quiet at its ceiling: push a step lower and see if idle memory goes.
+                            $l = [math]::Max($l, $ws) * 1.5
+                            $state.RaisedAt[$id] = $now
+                        } elseif ($rate[$id] -lt 20 -and $calm -and ($ws -ge 0.9 * $l -or ($ws -lt 0.5 * $l -and $held -ge 60))) {
                             $l = $l * 0.85
                         }
                     }
-                    $l = [math]::Max($floor, [math]::Min($a, $l))
+                    $want[$id] = $l
+                }
+
+                # An app's processes share its allowance by what they want, so
+                # one that needs room takes it from siblings that don't - a share
+                # by how much each holds would pin a capped process to its cap.
+                # The "any other app" allowance is each process's own.
+                $scale = 1.0
+                if ($budget -gt 0) {
+                    $sum = [double](($want.Values | Measure-Object -Sum).Sum)
+                    if ($sum -gt $budget) { $scale = $budget / $sum }
+                }
+                foreach ($id in $want.Keys) {
+                    $l = $want[$id] * $scale
+                    if ($budget -le 0) { $l = [math]::Min($allow[$id], $l) }
+                    $l = [math]::Max($floor, $l)
                     $state.Learned[$id] = $l
                     $wanted[$id] = [long]$l
                 }
@@ -644,6 +685,137 @@
                 factor = [math]::Round($factor, 2); holding = [bool]$state.Holding; churn = [math]::Round($churn); apps = $apps
             })
             $state.LastCapPass = $now
+        }.GetNewClosure()
+
+        # Apps you've left give back what they aren't using. afterSeconds
+        # after an app leaves the front, each of its processes is trimmed: its
+        # pages go to the standby list, so free RAM goes up at once, and what
+        # it touches again comes straight back from RAM, not disk. It's trimmed
+        # again once it has grown back by againAfterMB - unless it took most of
+        # the last trim straight back, which means it's using that memory: then
+        # it waits twice as long before the next try, up to maxWaitMinutes. The
+        # app in front, the game, 3dxGC and the protected list are never
+        # trimmed, nor is a process paging hard (it's using all it has).
+        $trimPass = {
+            param($scan)
+            $ta = $cfg.leakWatch.trimApps
+            if (-not $ta -or -not $ta.enabled) { return }
+            $ca      = $cfg.leakWatch.capApps
+            $now     = $scan.At
+            $after   = if ($null -ne $ta.afterSeconds) { [double]$ta.afterSeconds } else { 30.0 }
+            $again   = $(if ($ta.againAfterMB) { [double]$ta.againAfterMB } else { 64.0 }) * 1MB
+            $minWs   = $(if ($ta.aboveMB) { [double]$ta.aboveMB } else { 32.0 }) * 1MB
+            $maxWait = $(if ($ta.maxWaitMinutes) { [double]$ta.maxWaitMinutes } else { 30.0 }) * 60
+            $churnPer = if ($ca -and $ca.churnPerProcess) { [double]$ca.churnPerProcess } else { 300.0 }
+            $never   = @(@($ca.protect) + @($ca.never) | Where-Object { $_ })
+            $gamePid = $ctx.GetGamePid()
+
+            # With spareWhilePlaying, an app playing or recording sound is left
+            # whole. Unknown counts as playing.
+            $sounding = @{}
+            if ($ca -and $ca.spareWhilePlaying) {
+                $pids = $ctx.GetSoundPids()
+                foreach ($p in $scan.Procs) {
+                    if ($null -eq $pids -or $pids -contains $p.Id) { $sounding[$p.Name] = $true }
+                }
+            }
+
+            foreach ($id in @($state.TrimAway.Keys)) { if (-not $scan.ById.ContainsKey($id)) { $state.TrimAway.Remove($id); $state.Trim.Remove($id); $state.TrimmedAt.Remove($id) } }
+
+            $gave = @{}   # app name -> @(processes, bytes)
+            foreach ($p in $scan.Procs) {
+                if ($scan.Front.ContainsKey($p.Id)) { $state.TrimAway.Remove($p.Id); $state.Trim.Remove($p.Id); continue }
+                if (-not $state.TrimAway.ContainsKey($p.Id)) { $state.TrimAway[$p.Id] = $now; continue }
+                if (($now - $state.TrimAway[$p.Id]).TotalSeconds -lt $after) { continue }
+                if ($p.Id -eq $gamePid -or $sounding.ContainsKey($p.Name)) { continue }
+                $spared = $false
+                foreach ($pat in $never) { if ($p.Name -like $pat) { $spared = $true; break } }
+                if ($spared) { continue }
+                $ws = [double]$p.WorkingSet
+                if ($ws -lt $minWs) { continue }
+                if ($scan.Rate.ContainsKey($p.Id) -and $scan.Rate[$p.Id] -ge $churnPer) { continue }
+
+                $wait = $after
+                $t = $state.Trim[$p.Id]
+                if ($t) {
+                    $grown = $ws - $t.To
+                    if ($grown -lt $again -or ($now - $t.At).TotalSeconds -lt $t.Wait) { continue }
+                    $back = if ($t.Took -gt 0) { $grown / $t.Took } else { 1.0 }
+                    if ($back -ge 0.6) {
+                        # Most of the last trim came straight back: it's using it.
+                        if ($t.Wait -lt $maxWait) { $t.Wait = [math]::Min($maxWait, $t.Wait * 2); $t.At = $now; continue }
+                        $wait = $maxWait
+                    } else {
+                        $wait = [math]::Max($after, $t.Wait / 2)
+                    }
+                }
+
+                $r = $ctx.TrimApp($p.Id)
+                if (-not $r -or -not $r.Success) { continue }
+                $m  = $ctx.GetProcessMemory($p.Id)
+                $to = if ($m) { [double]$m.WorkingSetBytes } else { 0.0 }
+                $state.Trim[$p.Id] = [pscustomobject]@{ At = $now; To = $to; Took = [math]::Max(0.0, $ws - $to); Wait = $wait }
+                $state.TrimmedAt[$p.Id] = $now
+                if ($state.Caps.ContainsKey($p.Id)) { $state.CapMovedAt[$p.Id] = $now }
+                if (-not $gave.ContainsKey($p.Name)) { $gave[$p.Name] = @(0, 0.0) }
+                $gave[$p.Name] = @(($gave[$p.Name][0] + 1), ($gave[$p.Name][1] + [math]::Max(0.0, $ws - $to)))
+            }
+
+            if ($gave.Count -gt 0) {
+                $total = 0.0
+                $names = foreach ($n in ($gave.Keys | Sort-Object { -$gave[$_][1] })) {
+                    $total += $gave[$n][1]
+                    if ($gave[$n][0] -gt 1) { '{0} ({1})' -f $n, $gave[$n][0] } else { $n }
+                }
+                $msg = 'trim [apps you left] {0} - gave back {1:N0} MB' -f ($names -join ', '), ($total / 1MB)
+                if ($total -ge 64MB) { $ctx.Log($msg) } else { $ctx.LogDebug($msg) }
+            }
+        }.GetNewClosure()
+
+        # While you're away: what Trim All does, except emptying the standby
+        # list - every working set, Windows' file cache, the modified list
+        # written out. All of it lands on standby, which is free RAM that still
+        # holds what it held, so whatever is needed again comes back from RAM
+        # rather than disk. Emptying standby on top frees nothing more (it is
+        # already free) and only throws those copies away, so that stays for
+        # real memory pressure unless whenIdle.purgeStandby says otherwise.
+        # While the game is on screen, or with spareWhilePlaying anything
+        # plays sound, those apps are skipped and the rest trimmed one by one.
+        $idleSweep = {
+            param($idleSeconds)
+            $wi = $cfg.systemWide.whenIdle
+            $ca = $cfg.leakWatch.capApps
+            $before = $ctx.GetSystemMemory()
+            $ops = @()
+            if ($wi.emptyWorkingSets) {
+                $gamePid  = $ctx.GetGamePid()
+                $onScreen = $gamePid -gt 0 -and $ctx.IsGameForeground() -and -not $ctx.IsGameMinimized()
+                $pids     = [int[]]@()
+                if ($ca -and $ca.spareWhilePlaying) { $pids = $ctx.GetSoundPids() }
+                if ($null -eq $pids) {
+                    $ctx.LogDebug('idle sweep: could not tell what is playing sound - working sets left alone')
+                } elseif ($onScreen -or $pids.Count -gt 0) {
+                    $skipNames = @{}
+                    $procs = @($ctx.GetSessionProcesses())
+                    foreach ($p in $procs) { if ($pids -contains $p.Id) { $skipNames[$p.Name] = $true } }
+                    foreach ($p in $procs) {
+                        if ($p.Id -eq $gamePid -or $skipNames.ContainsKey($p.Name) -or $p.WorkingSet -lt 16MB) { continue }
+                        [void]$ctx.TrimApp($p.Id)
+                    }
+                } else {
+                    $ops += $ctx.EmptyAllWorkingSets()
+                }
+            }
+            if ($wi.emptySystemWorkingSet)   { $ops += $ctx.EmptySystemWorkingSet() }
+            if ($wi.flushModifiedList)       { $ops += $ctx.FlushModifiedPageList() }
+            if ($wi.purgeLowPriorityStandby) { $ops += $ctx.PurgeLowPriorityStandby() }
+            if ($wi.purgeStandby)            { $ops += $ctx.PurgeStandbyList() }
+            Start-Sleep -Milliseconds 300
+            $after = $ctx.GetSystemMemory()
+
+            foreach ($f in @($ops | Where-Object { $_ -and -not $_.Success })) { $ctx.LogDebug("idle sweep: $($f.Operation): $($f.Error)") }
+            $ctx.Log(("trim [away {0:N0} min] whole PC {1} GB -> {2} GB free ({3:+#,0;-#,0;0} MB)" -f `
+                ($idleSeconds / 60), $before.AvailPhysGB, $after.AvailPhysGB, (([double]$after.AvailPhysBytes - [double]$before.AvailPhysBytes) / 1MB)))
         }.GetNewClosure()
 
         # A killed governor can't lift its caps; this start lifts any it left.
@@ -718,17 +890,39 @@
 
             $lw = $cfg.leakWatch
 
-            # Caps: a pass every everySeconds, and at once when the app in front
-            # changes - a cap lifts within a tick of you switching to the app.
-            # Runs even while caps are off, so switching them on (or off) from
-            # the control panel takes effect live.
+            # Caps and trims: a pass every everySeconds, and at once when the
+            # app in front changes - a cap lifts within a tick of you switching
+            # to the app. Runs even while they're off, so switching them on (or
+            # off) from the control panel takes effect live.
             if ($lw -and $lw.capApps) {
                 $fg    = $ctx.GetForegroundPid()
                 $every = if ($lw.capApps.everySeconds) { $lw.capApps.everySeconds } else { 15 }
                 if ($fg -ne $state.LastFrontPid -or ((Get-Date) - $state.LastCapPass).TotalSeconds -ge $every) {
                     $state.LastFrontPid = $fg
                     $state.LastCapPass  = Get-Date
-                    & $capPass
+                    $fresh = $ctx.ReloadConfig()
+                    if ($fresh -and $fresh.leakWatch) {
+                        if ($fresh.leakWatch.capApps)  { $cfg.leakWatch.capApps  = $fresh.leakWatch.capApps }
+                        if ($fresh.leakWatch.trimApps) { $cfg.leakWatch.trimApps = $fresh.leakWatch.trimApps }
+                    }
+                    $scan = & $scanSession
+                    if ($scan) {
+                        & $capPass $scan
+                        & $trimPass $scan
+                    }
+                }
+            }
+
+            # Idle sweep: once you've been away idleSeconds, then every
+            # everyMinutes while you stay away.
+            $wi = if ($cfg.systemWide.enabled) { $cfg.systemWide.whenIdle } else { $null }
+            if ($wi -and $wi.enabled -and $ctx.IsElevated()) {
+                $idle = $ctx.GetIdleSeconds()
+                if ($idle -lt $wi.idleSeconds) {
+                    $state.LastIdleSweepAt = [datetime]::MinValue
+                } elseif (((Get-Date) - $state.LastIdleSweepAt).TotalMinutes -ge $wi.everyMinutes) {
+                    $state.LastIdleSweepAt = Get-Date
+                    & $idleSweep $idle
                 }
             }
 

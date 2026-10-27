@@ -2,6 +2,7 @@
 logs/
 config/
 backups/
+dist/
 
 # These hold machine-specific state: resolved paths, process ids, and copies of
 # game files taken before a BepInEx install. Nothing here belongs in the repo.

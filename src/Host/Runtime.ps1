@@ -439,6 +439,11 @@ function New-ModKitContext {
                 return (Get-Process -Id $svc.ProcessId -ErrorAction Stop).HandleCount
             } catch { return -1 }
         }
+        $ctx | Add-Member -MemberType ScriptMethod -Name GetSoundPids -Value {
+            # Every process playing or recording sound now, or $null when
+            # that can't be told - callers treat unknown as "something is".
+            try { return ,([int[]]@([ThreeDX.ModKit.Native.AudioActivity]::GetActiveProcessIds())) } catch { return $null }
+        }
         $ctx | Add-Member -MemberType ScriptMethod -Name GetAppActivity -Value {
             # Is anyone using this app right now? When in doubt, say yes.
             param([string]$Name)
@@ -492,6 +497,13 @@ function New-ModKitContext {
         $ctx | Add-Member -MemberType ScriptMethod -Name UncapProcess -Value {
             param([int]$ProcessId)
             return [ThreeDX.ModKit.Native.MemOps]::UncapProcess($ProcessId)
+        }
+        $ctx | Add-Member -MemberType ScriptMethod -Name TrimApp -Value {
+            # Trims another app's working set: its pages go to standby, free
+            # at once and back from RAM when it touches them again.
+            param([int]$ProcessId)
+            if ($ProcessId -eq $this._host.GamePid -or $this._ownPids -contains $ProcessId) { return $null }
+            return [ThreeDX.ModKit.Native.MemOps]::TrimProcess($ProcessId)
         }
         $ctx | Add-Member -MemberType ScriptMethod -Name SetMemoryPriority -Value {
             param([int]$ProcessId, [int]$Priority)

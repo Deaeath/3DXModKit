@@ -17,7 +17,7 @@
     Always relaunches unelevated. Re-triggering a UAC prompt in the middle of
     a background update the user did not initiate would be a worse surprise
     than temporarily losing the four admin-only RAMMap operations; reopening
-    via 3dxGC.bat restores them.
+    3dxGC restores them.
 
 .PARAMETER SourceDir
     Root of the freshly-extracted new version (contains gui\, src\, mods\, ...).
@@ -106,9 +106,23 @@ Write-UpdateLog "copied $copied file(s), $failed failure(s)"
 try { Remove-Item -LiteralPath $srcFull -Recurse -Force -ErrorAction SilentlyContinue } catch { }
 
 if ($failed -gt 0 -and $copied -eq 0) {
-    Write-UpdateLog "every file failed to copy - not relaunching, install may be in a bad state, reopen via 3dxGC.bat"
+    Write-UpdateLog "every file failed to copy - not relaunching, install may be in a bad state, reopen 3dxGC"
     exit 1
 }
+
+# --- keep Apps & Features in step ---------------------------------------
+# A copy installed by 3dxGC-Setup has an uninstall entry showing its version,
+# which would otherwise stay at the version first installed. The key name is
+# build\3dxGC.iss's AppId.
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B4E7C2A1-9F3D-4E58-A6C1-7D2B8E4F1A90}_is1'
+try {
+    $entry = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction Stop
+    $installedAt = [IO.Path]::GetFullPath($entry.InstallLocation).TrimEnd($sep)
+    if ($installedAt -eq [IO.Path]::GetFullPath($TargetDir).TrimEnd($sep)) {
+        Set-ItemProperty -LiteralPath $uninstallKey -Name DisplayVersion -Value $NewVersion
+        Write-UpdateLog "Apps & Features entry now shows $NewVersion"
+    }
+} catch { }
 
 # --- relaunch -----------------------------------------------------------
 $guiScript = Join-Path $TargetDir 'gui\Start-Gui.ps1'
