@@ -321,7 +321,8 @@ function Test-ModKitUpdate {
         unattended in the background.
     .OUTPUTS
         PSCustomObject: UpdateAvailable, LocalVersion, RemoteVersion,
-        DownloadUrl, ReleaseUrl, Error.
+        DownloadUrl (the zip), SetupUrl (3dxGC-Setup), SumsUrl
+        (SHA256SUMS.txt), ReleaseUrl, Error.
     #>
     [CmdletBinding()]
     param([int]$TimeoutSec = 10)
@@ -332,6 +333,8 @@ function Test-ModKitUpdate {
         LocalVersion    = $local
         RemoteVersion   = $null
         DownloadUrl     = $null
+        SetupUrl        = $null
+        SumsUrl         = $null
         ReleaseUrl      = $null
         Error           = $null
     }
@@ -346,14 +349,18 @@ function Test-ModKitUpdate {
         $tag = [string]$resp.tag_name
         $remote = $tag.TrimStart('v', 'V')
 
-        $asset = $resp.assets | Where-Object { $_.name -like '3DXModKit-*.zip' } | Select-Object -First 1
-        if (-not $asset) {
-            $result.Error = "release '$tag' has no 3DXModKit-*.zip asset"
+        $zip   = $resp.assets | Where-Object { $_.name -like '3DXModKit-*.zip' } | Select-Object -First 1
+        $setup = $resp.assets | Where-Object { $_.name -like '3dxGC-Setup-*.exe' } | Select-Object -First 1
+        $sums  = $resp.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1
+        if (-not $zip -and -not $setup) {
+            $result.Error = "release '$tag' has neither a 3DXModKit-*.zip nor a 3dxGC-Setup-*.exe"
             return $result
         }
 
         $result.RemoteVersion = $remote
-        $result.DownloadUrl   = $asset.browser_download_url
+        if ($zip)   { $result.DownloadUrl = $zip.browser_download_url }
+        if ($setup) { $result.SetupUrl    = $setup.browser_download_url }
+        if ($sums)  { $result.SumsUrl     = $sums.browser_download_url }
         $result.ReleaseUrl    = $resp.html_url
 
         try {
@@ -368,6 +375,72 @@ function Test-ModKitUpdate {
         $result.Error = $_.Exception.Message
     }
 
+    return $result
+}
+
+function Get-ModKitInstall {
+    <#
+    .SYNOPSIS
+        The Apps & Features entry 3dxGC-Setup made for this copy, or $null
+        for a copy run from the zip or a git checkout. The key is
+        build\3dxGC.iss's AppId.
+    #>
+    [CmdletBinding()]
+    param()
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B4E7C2A1-9F3D-4E58-A6C1-7D2B8E4F1A90}_is1'
+    try {
+        $entry = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+        $at   = [IO.Path]::GetFullPath([string]$entry.InstallLocation).TrimEnd('\')
+        $here = [IO.Path]::GetFullPath($Script:ModKitRoot).TrimEnd('\')
+        if ($at -eq $here) { return $entry }
+    } catch { }
+    return $null
+}
+
+function Save-ModKitUpdate {
+    <#
+    .SYNOPSIS
+        Downloads one release file and keeps it only if its SHA-256 matches
+        the release's SHA256SUMS.txt. Never throws.
+    .OUTPUTS
+        PSCustomObject: Ok, Path (the verified file, in a new temp folder),
+        Error.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [string]$SumsUrl,
+        [int]$TimeoutSec = 120
+    )
+    $result = [pscustomobject]@{ Ok = $false; Path = $null; Error = $null }
+    if (-not $SumsUrl) { $result.Error = 'the release has no SHA256SUMS.txt, so the download cannot be verified'; return $result }
+
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ('3dxgc-update-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $name = [IO.Path]::GetFileName(([uri]$Url).AbsolutePath)
+        $file = Join-Path $dir $name
+        $sums = Join-Path $dir 'SHA256SUMS.txt'
+        Invoke-WebRequest -Uri $Url -OutFile $file -UseBasicParsing -TimeoutSec $TimeoutSec
+        Invoke-WebRequest -Uri $SumsUrl -OutFile $sums -UseBasicParsing -TimeoutSec 30
+
+        $expected = $null
+        foreach ($line in Get-Content -LiteralPath $sums) {
+            if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(.+?)\s*$' -and $Matches[2] -eq $name) { $expected = $Matches[1].ToLowerInvariant() }
+        }
+        $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        if (-not $expected) {
+            $result.Error = "SHA256SUMS.txt has no line for $name"
+        } elseif ($actual -ne $expected) {
+            $result.Error = "$name does not match its checksum (got $actual, expected $expected) - not using it"
+        } else {
+            $result.Ok   = $true
+            $result.Path = $file
+        }
+    } catch {
+        $result.Error = $_.Exception.Message
+    }
+    if (-not $result.Ok) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
     return $result
 }
 
@@ -464,6 +537,8 @@ Export-ModuleMember -Function @(
     'Get-ModKitInfo'
     'Get-ModKitVersion'
     'Test-ModKitUpdate'
+    'Get-ModKitInstall'
+    'Save-ModKitUpdate'
     'Test-ModKitMods'
     'Invoke-ModKitEmpty'
     'Start-ModKit'

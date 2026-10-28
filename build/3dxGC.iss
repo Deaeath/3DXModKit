@@ -6,9 +6,14 @@
 ;   ISCC /DAppVersion=1.6.0 /DStageDir=<repo>\dist\stage\3DXModKit build\3dxGC.iss
 ;
 ; Installs into %LOCALAPPDATA%\Programs\3dxGC without admin rights, so Setup
-; never shows a UAC prompt and the panel's own self-update can keep replacing
-; files in place. config\, logs\ and backups\ belong to the user: Setup never
-; ships them, and the uninstaller asks before deleting settings.
+; never shows a UAC prompt. The panel updates an installed copy by running
+; the next release's Setup silently (/visible=1 and /noelevate=1 tell Setup
+; how to reopen it). config\, logs\ and backups\ belong to the user: Setup
+; never ships them, and the uninstaller asks before deleting settings.
+;
+; /DTestBuild makes a build that installs next to a real copy without
+; touching it: its own Apps entry, shortcuts, startup entry, window title
+; and exit signal.
 
 #ifndef AppVersion
   #error Pass /DAppVersion=x.y.z - build\Build-Release.ps1 does
@@ -17,22 +22,31 @@
   #error Pass /DStageDir=<staged 3DXModKit folder> - build\Build-Release.ps1 does
 #endif
 
-; The module manifest's GUID. Gui\Apply-Update.ps1 finds the Apps & Features
-; entry by it ({AppGuid}_is1), so the two must not drift apart.
-#define AppGuid "B4E7C2A1-9F3D-4E58-A6C1-7D2B8E4F1A90"
 ; Also set by gui\Start-Gui.ps1 on its window: the taskbar matches the two.
 #define AppUserModelId "Deaeath.3dxGC"
-; gui\MainWindow.xaml's Title. A test build passes another, so it can be
-; tried out next to a real running panel without closing it.
-#ifndef PanelTitle
+#ifdef TestBuild
+  #define AppGuid "B4E7C2A1-9F3D-4E58-A6C1-7D2B8E4F1A91"
+  #define AppTitle "3dxGC Test"
+  #define RunValueName "3dxGC-test"
+  #define PanelTitle "3dxGC-test-panel"
+  #define ExitSignal "Local\3dxGC-Exit-test"
+#else
+  ; The module manifest's GUID. Get-ModKitInstall and gui\Apply-Update.ps1
+  ; find the Apps & Features entry by it ({AppGuid}_is1).
+  #define AppGuid "B4E7C2A1-9F3D-4E58-A6C1-7D2B8E4F1A90"
+  #define AppTitle "3dxGC"
+  ; The panel's own "Start with Windows" value.
+  #define RunValueName "3dxGC"
+  ; gui\MainWindow.xaml's Title, and the event gui\Start-Gui.ps1 opens.
   #define PanelTitle "3dxGC - 3DXChat Control Panel"
+  #define ExitSignal "Local\3dxGC-Exit"
 #endif
 
 [Setup]
 AppId={{{#AppGuid}}
-AppName=3dxGC
+AppName={#AppTitle}
 AppVersion={#AppVersion}
-AppVerName=3dxGC {#AppVersion}
+AppVerName={#AppTitle} {#AppVersion}
 AppPublisher=Deaeath
 AppPublisherURL=https://github.com/Deaeath/3DXModKit
 AppSupportURL=https://github.com/Deaeath/3DXModKit/issues
@@ -43,7 +57,7 @@ VersionInfoDescription=3dxGC Setup
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\3dxGC
 DisableProgramGroupPage=yes
-UninstallDisplayName=3dxGC
+UninstallDisplayName={#AppTitle}
 UninstallDisplayIcon={app}\3dxGC.exe
 SetupIconFile=..\gui\3dxGC.ico
 WizardStyle=modern dynamic
@@ -72,20 +86,20 @@ Type: filesandordirs; Name: "{app}\gui"
 Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: ".git*"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\3dxGC"; Filename: "{app}\3dxGC.exe"; Comment: "Keeps 3DXChat's memory in check"; AppUserModelID: "{#AppUserModelId}"
-Name: "{autodesktop}\3dxGC"; Filename: "{app}\3dxGC.exe"; Comment: "Keeps 3DXChat's memory in check"; AppUserModelID: "{#AppUserModelId}"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppTitle}"; Filename: "{app}\3dxGC.exe"; Comment: "Keeps 3DXChat's memory in check"; AppUserModelID: "{#AppUserModelId}"
+Name: "{autodesktop}\{#AppTitle}"; Filename: "{app}\3dxGC.exe"; Comment: "Keeps 3DXChat's memory in check"; AppUserModelID: "{#AppUserModelId}"; Tasks: desktopicon
 
 [Run]
 ; Setup closed a running panel to update it, so it comes back the way it was.
-Filename: "{app}\3dxGC.exe"; Parameters: "-Minimized"; Flags: nowait; Check: WasRunning
+Filename: "{app}\3dxGC.exe"; Parameters: "{code:RelaunchParams}"; Flags: nowait; Check: WasRunning
 Filename: "{app}\3dxGC.exe"; Description: "Open 3dxGC now"; Flags: postinstall nowait skipifsilent; Check: not WasRunning
 
 [Code]
 const
   PanelTitle = '{#PanelTitle}';
-  ExitSignalName = 'Local\3dxGC-Exit';
+  ExitSignalName = '{#ExitSignal}';
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
-  RunValue = '3dxGC';
+  RunValue = '{#RunValueName}';
   EVENT_MODIFY_STATE = $0002;
   SYNCHRONIZE = $00100000;
 
@@ -105,6 +119,16 @@ function CloseHandle(Handle: THandle): BOOL;
 function WasRunning: Boolean;
 begin
   Result := PanelWasRunning;
+end;
+
+{ How the panel Setup closed comes back: in the tray unless it was on
+  screen (/visible=1), told what it was updated to, and - for one that ran
+  without administrator (/noelevate=1) - without a UAC prompt. }
+function RelaunchParams(Param: String): String;
+begin
+  Result := '-JustUpdated {#AppVersion}';
+  if ExpandConstant('{param:visible|0}') <> '1' then Result := '-Minimized ' + Result;
+  if ExpandConstant('{param:noelevate|0}') = '1' then Result := '-noelevate ' + Result;
 end;
 
 function PanelOpen: Boolean;

@@ -142,6 +142,7 @@ $State = [pscustomobject]@{
     UpdateDownloadJob = $null
     LastUpdateCheckAt = [datetime]::MinValue
     UpdateApplying    = $false
+    UpdateSetupProcess = $null
     AppRestartJob     = $null
     AppRestartName    = $null
     AppRestartSize    = $null
@@ -577,6 +578,7 @@ function Update-Telemetry {
     }
     Receive-UpdateCheck
     Receive-UpdateDownload
+    Receive-SetupUpdate
     Receive-AppRestart
 
     if ($UI.Tabs.SelectedItem -eq $UI.TabCaps -and ((Get-Date) - $Script:CapsLiveAt).TotalSeconds -ge 5) {
@@ -952,9 +954,16 @@ function Save-CapsTab {
 #
 # Both phases run as background jobs (separate processes) polled from the
 # existing telemetry timer tick, so a slow GitHub response never freezes the
-# window. Applying an update always exits this process for real and lets
-# Apply-Update.ps1 (a separate process) do the file swap once this one is
-# actually gone - never overwriting files a running process still has open.
+# window. Nothing downloaded is used unless it matches the release's
+# SHA256SUMS.txt.
+#
+# A copy 3dxGC-Setup installed updates the way installed apps do: it runs
+# the new Setup silently, which closes this window through the exit signal,
+# installs, and reopens 3dxGC - started from this process, it inherits its
+# administrator rights, so the reopened panel has them without a prompt. A
+# copy run from the zip downloads the zip instead, and Apply-Update.ps1 (a
+# separate process) swaps the files once this one is actually gone - never
+# overwriting files a running process still has open.
 # ---------------------------------------------------------------------------
 
 function Start-UpdateCheck {
@@ -1004,28 +1013,37 @@ function Receive-UpdateCheck {
         }
 
         Add-LogLine "[Info] update available: v$($result.RemoteVersion) (currently v$($result.LocalVersion))"
-        Start-UpdateDownload -DownloadUrl $result.DownloadUrl -Version $result.RemoteVersion
+        # Installed copies update through Setup; the zip is for everyone else.
+        if ((Get-ModKitInstall) -and $result.SetupUrl) {
+            Start-UpdateDownload -Url $result.SetupUrl -SumsUrl $result.SumsUrl -Version $result.RemoteVersion -Kind 'setup'
+        } elseif ($result.DownloadUrl) {
+            Start-UpdateDownload -Url $result.DownloadUrl -SumsUrl $result.SumsUrl -Version $result.RemoteVersion -Kind 'zip'
+        } else {
+            Add-LogLine "[Warn] v$($result.RemoteVersion) has no download this copy can update from"
+        }
     }
 }
 
 function Start-UpdateDownload {
-    param([string]$DownloadUrl, [string]$Version)
+    param([string]$Url, [string]$SumsUrl, [string]$Version, [ValidateSet('setup', 'zip')][string]$Kind)
     if ($State.UpdateDownloadJob -or $State.UpdateApplying) { return }
 
     Set-Status "Downloading update v$Version..." $Colours.Blue
+    $modulePath = Join-Path $ModKitRoot '3DXModKit.psm1'
     $State.UpdateDownloadJob = Start-Job -ScriptBlock {
-        param($Url, $Ver)
+        param($ModulePath, $Url, $SumsUrl, $Ver, $Kind)
 
-        $result = [pscustomobject]@{ Ok = $false; SourceDir = $null; Error = $null; Version = $Ver }
+        $result = [pscustomobject]@{ Ok = $false; Kind = $Kind; Path = $null; SourceDir = $null; Error = $null; Version = $Ver }
         try {
+            Import-Module $ModulePath -Force
+            $file = Save-ModKitUpdate -Url $Url -SumsUrl $SumsUrl
+            if (-not $file.Ok) { $result.Error = $file.Error; return $result }
+            if ($Kind -eq 'setup') { $result.Ok = $true; $result.Path = $file.Path; return $result }
+
             $stagingRoot = Join-Path ([IO.Path]::GetTempPath()) ('3dxgc-update-' + [guid]::NewGuid().ToString('N'))
-            $zipPath = Join-Path ([IO.Path]::GetTempPath()) ('3dxgc-update-' + [guid]::NewGuid().ToString('N') + '.zip')
-
-            Invoke-WebRequest -Uri $Url -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
-
             Add-Type -AssemblyName System.IO.Compression.FileSystem
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $stagingRoot)
-            Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($file.Path, $stagingRoot)
+            Remove-Item -LiteralPath (Split-Path -Parent $file.Path) -Recurse -Force -ErrorAction SilentlyContinue
 
             $sourceDir = Join-Path $stagingRoot '3DXModKit'
             $launcherOk = Test-Path -LiteralPath (Join-Path $sourceDir '3dxGC.bat')
@@ -1043,7 +1061,7 @@ function Start-UpdateDownload {
             $result.Error = $_.Exception.Message
         }
         return $result
-    } -ArgumentList $DownloadUrl, $Version
+    } -ArgumentList $modulePath, $Url, $SumsUrl, $Version, $Kind
 }
 
 function Receive-UpdateDownload {
@@ -1062,9 +1080,57 @@ function Receive-UpdateDownload {
         return
     }
 
-    Add-LogLine "[Info] update v$($result.Version) downloaded and verified - applying"
+    Add-LogLine "[Info] update v$($result.Version) downloaded and matches its checksum - applying"
     Set-Status "Update v$($result.Version) ready - applying..." $Colours.Good
-    Start-SilentUpdateApply -SourceDir $result.SourceDir -Version $result.Version
+    if ($result.Kind -eq 'setup') { Start-SetupUpdate -SetupPath $result.Path -Version $result.Version }
+    else { Start-SilentUpdateApply -SourceDir $result.SourceDir -Version $result.Version }
+}
+
+# Recorded before anything is swapped, so the loop guard in
+# Receive-UpdateCheck sees it on the relaunched instance's very first check,
+# no matter what that instance's own version string turns out to say.
+function Save-UpdateAttempt {
+    param([string]$Version)
+    $settings = Get-GuiSettings
+    $settings.LastUpdateAppliedVersion = $Version
+    $settings.LastUpdateAppliedAt = (Get-Date).ToString('o')
+    Save-GuiSettings $settings
+}
+
+function Start-SetupUpdate {
+    param([string]$SetupPath, [string]$Version)
+
+    $State.UpdateApplying = $true
+    $log = Join-Path $ModKitRoot 'logs\update-setup.log'
+    # Setup reopens 3dxGC the way it is now: on screen or in the tray, and
+    # without a UAC prompt when it's running without administrator.
+    $argList = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/LOG="' + $log + '"'))
+    if ($win.IsVisible -and $win.WindowState -ne 'Minimized') { $argList += '/visible=1' }
+    if (-not $M::IsElevated()) { $argList += '/noelevate=1' }
+
+    try {
+        $State.UpdateSetupProcess = Start-Process -FilePath $SetupPath -ArgumentList $argList -PassThru
+        # Held open now, or ExitCode reads empty once it has exited.
+        $null = $State.UpdateSetupProcess.Handle
+    } catch {
+        Add-LogLine "[Error] could not run Setup: $($_.Exception.Message)"
+        $State.UpdateApplying = $false
+        return
+    }
+    Save-UpdateAttempt $Version
+    Add-LogLine "[Info] running 3dxGC Setup v$Version - it closes 3dxGC, updates it and opens it again"
+}
+
+# Setup closes this window when it gets going. Still here after Setup exited
+# means it stopped short: say so, and let the next check try again.
+function Receive-SetupUpdate {
+    $p = $State.UpdateSetupProcess
+    if (-not $p -or -not $p.HasExited) { return }
+    $State.UpdateSetupProcess = $null
+    $State.UpdateApplying = $false
+    $msg = "Setup stopped without updating (exit code $($p.ExitCode)) - see logs\update-setup.log"
+    Add-LogLine "[Warn] update: $msg"
+    Set-Status "Update failed: $msg" $Colours.Warn
 }
 
 function Start-SilentUpdateApply {
@@ -1094,13 +1160,7 @@ function Start-SilentUpdateApply {
         return
     }
 
-    # Recorded before the swap so the loop guard in Receive-UpdateCheck sees
-    # it immediately on the relaunched instance's very first check, no matter
-    # what that instance's own version string turns out to say.
-    $settings = Get-GuiSettings
-    $settings.LastUpdateAppliedVersion = $Version
-    $settings.LastUpdateAppliedAt = (Get-Date).ToString('o')
-    Save-GuiSettings $settings
+    Save-UpdateAttempt $Version
 
     # The updater is now waiting on this exact process id - Close() is what
     # lets it safely swap the files once this process is actually gone.

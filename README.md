@@ -133,7 +133,7 @@ cd 3DXModKit
 
 - **Starts governing on its own.** No click required — it launches with your last-used profile (or `default`, the first time) already running.
 - **Minimising hides it to the tray**, not the taskbar — the governor keeps running. Closing the window (the X button, or **Exit** in the tray menu) stops it for real.
-- **Updates itself.** It checks for a newer release every few hours and on launch, and if one exists, downloads, verifies, and applies it — restarting itself automatically once the swap is done. No download-and-reinstall, ever.
+- **Updates itself.** It checks for a newer release on launch and every six hours. An installed copy downloads the new `3dxGC-Setup` and runs it silently: Setup closes 3dxGC, updates it and opens it again, as it was, without a UAC prompt. A copy run from the zip downloads the zip and swaps its files instead. Either way the download is used only if it matches the release's `SHA256SUMS.txt`. No download-and-reinstall, ever.
 - **"Start with Windows"** checkbox (next to the profile picker) so you never have to open it at all — check it once, forget the app exists.
 - **Only one copy runs.** Opening it again while it's in the tray tells you so, instead of starting a second governor that would fight the first.
 
